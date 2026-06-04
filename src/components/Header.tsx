@@ -4,7 +4,7 @@
  */
 
 import React from "react";
-import { Cpu, Network, Code, BookOpen, Zap, Smartphone, ShieldAlert, Shield } from "lucide-react";
+import { Cpu, Network, Code, BookOpen, Zap, Smartphone, ShieldAlert, Shield, Layers } from "lucide-react";
 import { useAuraContext } from "../store/AuraContext";
 
 export const Header: React.FC = () => {
@@ -135,6 +135,17 @@ export const Header: React.FC = () => {
         >
           <Shield className="w-3.5 h-3.5 text-emerald-400" />
           Memory Safety & Benchmarking (TS №9)
+        </button>
+        <button
+          onClick={() => setActiveTab("jni-ndk-ci")}
+          className={`px-4 py-1.5 rounded-md text-xs font-medium transition flex items-center gap-2 cursor-pointer ${
+            activeTab === "jni-ndk-ci"
+              ? "bg-[#11162B] text-emerald-400 shadow-sm animate-pulse border border-emerald-500/20"
+              : "text-slate-500 hover:text-slate-300"
+          }`}
+        >
+          <Layers className="w-3.5 h-3.5 text-blue-400" />
+          JNI Bridge & CI/CD Pipeline (TS №10)
         </button>
       </div>
     </header>

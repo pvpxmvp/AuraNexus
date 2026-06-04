@@ -21,7 +21,8 @@ import {
   SelectedComposeCodeFileType,
   ShapeResultType,
   ActiveStabilityCodeFileType,
-  SelectedSafetyCodeFileType
+  SelectedSafetyCodeFileType,
+  SelectedJniCodeFileType
 } from "../types";
 import { generateSineWave, generateNoisySignal } from "../utils/generators";
 
@@ -231,6 +232,24 @@ interface AuraContextValue {
   setStress10kProgress: React.Dispatch<React.SetStateAction<number>>;
   stress10kLogs: any[];
   setStress10kLogs: React.Dispatch<React.SetStateAction<any[]>>;
+
+  // --- JNI Bridge, NDK & CI/CD State (TS #10) ---
+  selectedJniCodeFile: SelectedJniCodeFileType;
+  setSelectedJniCodeFile: React.Dispatch<React.SetStateAction<SelectedJniCodeFileType>>;
+  jniCorePtr: number;
+  setJniCorePtr: React.Dispatch<React.SetStateAction<number>>;
+  jniLogs: string[];
+  setJniLogs: React.Dispatch<React.SetStateAction<string[]>>;
+  isJniInitialized: boolean;
+  setIsJniInitialized: React.Dispatch<React.SetStateAction<boolean>>;
+  pipelineRunning: boolean;
+  setPipelineRunning: React.Dispatch<React.SetStateAction<boolean>>;
+  pipelineProgress: number;
+  setPipelineProgress: React.Dispatch<React.SetStateAction<number>>;
+  pipelineLogs: string[];
+  setPipelineLogs: React.Dispatch<React.SetStateAction<string[]>>;
+  pipelineArtifactUrl: string | null;
+  setPipelineArtifactUrl: React.Dispatch<React.SetStateAction<string | null>>;
 
   // --- Global Functions ---
   reinitializeNetwork: () => void;
@@ -498,6 +517,16 @@ export const AuraContextProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const [stressTesting10k, setStressTesting10k] = useState<boolean>(false);
   const [stress10kProgress, setStress10kProgress] = useState<number>(0);
   const [stress10kLogs, setStress10kLogs] = useState<any[]>([]);
+
+  // --- JNI Bridge, NDK & CI/CD State (TS #10) ---
+  const [selectedJniCodeFile, setSelectedJniCodeFile] = useState<SelectedJniCodeFileType>("aura-jni.cpp");
+  const [jniCorePtr, setJniCorePtr] = useState<number>(0);
+  const [jniLogs, setJniLogs] = useState<string[]>([]);
+  const [isJniInitialized, setIsJniInitialized] = useState<boolean>(false);
+  const [pipelineRunning, setPipelineRunning] = useState<boolean>(false);
+  const [pipelineProgress, setPipelineProgress] = useState<number>(0);
+  const [pipelineLogs, setPipelineLogs] = useState<string[]>([]);
+  const [pipelineArtifactUrl, setPipelineArtifactUrl] = useState<string | null>(null);
 
   const updateSobelFeedback = (flatGrid: number[]) => {
     const width = 32;
@@ -909,6 +938,15 @@ export const AuraContextProvider: React.FC<{ children: React.ReactNode }> = ({ c
         stressTesting10k, setStressTesting10k,
         stress10kProgress, setStress10kProgress,
         stress10kLogs, setStress10kLogs,
+
+        selectedJniCodeFile, setSelectedJniCodeFile,
+        jniCorePtr, setJniCorePtr,
+        jniLogs, setJniLogs,
+        isJniInitialized, setIsJniInitialized,
+        pipelineRunning, setPipelineRunning,
+        pipelineProgress, setPipelineProgress,
+        pipelineLogs, setPipelineLogs,
+        pipelineArtifactUrl, setPipelineArtifactUrl,
 
         reinitializeNetwork,
         computeForwardTS,
