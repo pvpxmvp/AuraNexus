@@ -314,6 +314,45 @@ pub struct TensorCore {
     pub weights: CacheAlignedWeights,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TrainingStatus {
+    pub converged: bool,
+    pub expanded: bool,
+}
+
+pub fn apply_convolution_3x3(input: &[f32], width: usize, height: usize) -> Vec<f32> {
+    if width < 3 || height < 3 {
+        return input.to_vec();
+    }
+    let mut output = vec![0.0; width * height];
+    for y in 1..(height - 1) {
+        for x in 1..(width - 1) {
+            let idx = |r: usize, c: usize| r * width + c;
+            
+            let val_tl = input[idx(y - 1, x - 1)];
+            let val_tc = input[idx(y - 1, x)];
+            let val_tr = input[idx(y - 1, x + 1)];
+            
+            let val_ml = input[idx(y, x - 1)];
+            let val_mr = input[idx(y, x + 1)];
+            
+            let val_bl = input[idx(y + 1, x - 1)];
+            let val_bc = input[idx(y + 1, x)];
+            let val_br = input[idx(y + 1, x + 1)];
+            
+            let gx = -1.0 * val_tl + 1.0 * val_tr
+                   - 2.0 * val_ml + 2.0 * val_mr
+                   - 1.0 * val_bl + 1.0 * val_br;
+                   
+            let gy = -1.0 * val_tl - 2.0 * val_tc - 1.0 * val_tr
+                   + 1.0 * val_bl + 2.0 * val_bc + 1.0 * val_br;
+                   
+            output[idx(y, x)] = (gx * gx + gy * gy).sqrt();
+        }
+    }
+    output
+}
+
 /// The core computing engine for the AuraNexus Tensor Train neural network.
 pub struct AuraCore {
     /// Arena allocator containing all sequential parameters
@@ -329,6 +368,13 @@ pub struct AuraCore {
     pub pos_states_ptrs: Vec<*mut f32>,
     pub neg_states_ptrs: Vec<*mut f32>,
     pub state_sizes: Vec<usize>,
+
+    /// Stagnation tracking for deterministic expansion
+    pub stagnation_counter: u32,
+    /// Previous positive goodness value to detect drop
+    pub previous_pos_goodness: f32,
+    /// Thread-safe ring rolling buffer of input histories
+    pub input_history: std::sync::Mutex<Vec<Vec<f32>>>,
 }
 
 /// Highly optimized ARM NEON parallel vector multiply-accumulate (GEMV cell)
@@ -437,6 +483,9 @@ impl AuraCore {
             pos_states_ptrs: Vec::new(),
             neg_states_ptrs: Vec::new(),
             state_sizes: Vec::new(),
+            stagnation_counter: 0,
+            previous_pos_goodness: 0.0,
+            input_history: std::sync::Mutex::new(Vec::with_capacity(64)),
         };
         
         core_instance.allocate_buffers();
@@ -470,16 +519,69 @@ impl AuraCore {
         }
     }
 
-    /// Computes un-allocated forward propagation.
-    pub fn forward(&self, input: &[f32]) -> f32 {
+    /// Normalises the input vector using sliding-window LayerNorm-lite online normalization.
+    pub fn normalize_input(&self, input: &[f32]) -> Vec<f32> {
+        let mut history = self.input_history.lock().unwrap();
+        
+        history.push(input.to_vec());
+        if history.len() > 64 {
+            history.remove(0);
+        }
+        
+        let n = history.len();
+        let dim = input.len();
+        let mut normalized = vec![0.0; dim];
+        
+        if n == 0 {
+            return input.to_vec();
+        }
+        
+        for i in 0..dim {
+            let mut sum = 0.0;
+            for vec in history.iter() {
+                if i < vec.len() {
+                    sum += vec[i];
+                }
+            }
+            let mean = sum / n as f32;
+            
+            let mut var_sum = 0.0;
+            for vec in history.iter() {
+                if i < vec.len() {
+                    let diff = vec[i] - mean;
+                    var_sum += diff * diff;
+                }
+            }
+            let var = var_sum / n as f32;
+            let std_dev = (var + 1e-5).sqrt();
+            
+            normalized[i] = (input[i] - mean) / std_dev;
+        }
+        
+        normalized
+    }
+
+    /// Processes input: applies 3x3 Sobel convolution if it is an image, then applies online normalization.
+    pub fn process_input(&self, input: &[f32], is_image: bool, width: usize, height: usize) -> Vec<f32> {
+        let convolved = if is_image {
+            apply_convolution_3x3(input, width, height)
+        } else {
+            input.to_vec()
+        };
+        self.normalize_input(&convolved)
+    }
+
+    /// Computes un-allocated forward propagation on processed and normalized inputs.
+    pub fn forward(&self, input: &[f32], is_image: bool, width: usize, height: usize) -> f32 {
+        let processed_input = self.process_input(input, is_image, width, height);
         let mut current_state = vec![1.0; 1];
         let mut goodness = 0.0;
         let mut start_idx = 0;
         
         for k in 0..self.cores.len() {
             let core = &self.cores[k];
-            let end_idx = (start_idx + core.d).min(input.len());
-            let x_k = &input[start_idx..end_idx];
+            let end_idx = (start_idx + core.d).min(processed_input.len());
+            let x_k = &processed_input[start_idx..end_idx];
             start_idx += core.d;
             
             let mut next_state = vec![0.0; core.r_curr];
@@ -509,7 +611,8 @@ impl AuraCore {
     }
 
     /// In-place forward pass writing directly into Cache Aligned Arena memory slots. Zero heap allocations.
-    pub fn forward_in_place(&self, input: &[f32], states_ptrs: &[*mut f32]) -> f32 {
+    /// Used directly on already processed/normalized vectors to avoid double normalisation.
+    pub fn forward_in_place_raw(&self, input: &[f32], states_ptrs: &[*mut f32]) -> f32 {
         unsafe {
             *states_ptrs[0] = 1.0;
         }
@@ -559,10 +662,19 @@ impl AuraCore {
         goodness
     }
 
-    /// Single local train step executing on CacheAlignedArena structures. Zero malloc/free calls.
-    pub fn train_step(&mut self, positive_data: &[f32], negative_data: &[f32]) {
-        let pos_goodness = self.forward_in_place(positive_data, &self.pos_states_ptrs);
-        let neg_goodness = self.forward_in_place(negative_data, &self.neg_states_ptrs);
+    /// In-place forward pass with input processing and inline normalization.
+    pub fn forward_in_place(&self, input: &[f32], is_image: bool, width: usize, height: usize, states_ptrs: &[*mut f32]) -> f32 {
+        let processed = self.process_input(input, is_image, width, height);
+        self.forward_in_place_raw(&processed, states_ptrs)
+    }
+
+    /// Single local train step executing on CacheAlignedArena structures. Clamps weights to [-1, 1].
+    pub fn train_step(&mut self, positive_data: &[f32], negative_data: &[f32], is_image: bool, width: usize, height: usize) -> TrainingStatus {
+        let processed_pos = self.process_input(positive_data, is_image, width, height);
+        let processed_neg = self.process_input(negative_data, is_image, width, height);
+
+        let pos_goodness = self.forward_in_place_raw(&processed_pos, &self.pos_states_ptrs);
+        let neg_goodness = self.forward_in_place_raw(&processed_neg, &self.neg_states_ptrs);
         
         let pos_deficit = (self.threshold - pos_goodness).max(0.0);
         let neg_surplus = (neg_goodness - self.threshold).max(0.0);
@@ -573,12 +685,12 @@ impl AuraCore {
         for k in 0..self.cores.len() {
             let core = &mut self.cores[k];
             
-            let pos_end_idx = (pos_start_idx + core.d).min(positive_data.len());
-            let pos_x_k = &positive_data[pos_start_idx..pos_end_idx];
+            let pos_end_idx = (pos_start_idx + core.d).min(processed_pos.len());
+            let pos_x_k = &processed_pos[pos_start_idx..pos_end_idx];
             pos_start_idx += core.d;
             
-            let neg_end_idx = (neg_start_idx + core.d).min(negative_data.len());
-            let neg_x_k = &negative_data[neg_start_idx..neg_end_idx];
+            let neg_end_idx = (neg_start_idx + core.d).min(processed_neg.len());
+            let neg_x_k = &processed_neg[neg_start_idx..neg_end_idx];
             neg_start_idx += core.d;
             
             let pos_prev_ptr = self.pos_states_ptrs[k];
@@ -624,6 +736,45 @@ impl AuraCore {
                     }
                 }
             }
+        }
+
+        // Weight clipping to ensure numeric stability under [-1.0, 1.0]
+        for core in &mut self.cores {
+            let len = core.weights.len();
+            for i in 0..len {
+                unsafe {
+                    let val = *core.weights.data.add(i);
+                    *core.weights.data.add(i) = val.clamp(-1.0, 1.0);
+                }
+            }
+        }
+
+        // Deterministic Stagnation Check
+        let converged = pos_goodness > self.threshold && neg_goodness < self.threshold;
+        
+        if pos_goodness > self.threshold {
+            if converged {
+                self.stagnation_counter = 0;
+            } else if pos_goodness < self.previous_pos_goodness {
+                self.stagnation_counter = 0;
+            } else {
+                self.stagnation_counter += 1;
+            }
+        } else {
+            self.stagnation_counter = 0;
+        }
+        self.previous_pos_goodness = pos_goodness;
+
+        let mut expanded = false;
+        if self.stagnation_counter > 500 {
+            self.expand_rank();
+            self.stagnation_counter = 0;
+            expanded = true;
+        }
+
+        TrainingStatus {
+            converged,
+            expanded,
         }
     }
 
@@ -732,11 +883,11 @@ mod tests {
         let neg_data = vec![-1.0, 0.1, -0.8, 0.2, -0.9, 0.0, -1.0, 0.1];
         
         for _ in 0..500 {
-            core.train_step(&pos_data, &neg_data);
+            core.train_step(&pos_data, &neg_data, false, 0, 0);
         }
         
-        let pos_final = core.forward(&pos_data);
-        let neg_final = core.forward(&neg_data);
+        let pos_final = core.forward(&pos_data, false, 0, 0);
+        let neg_final = core.forward(&neg_data, false, 0, 0);
         
         assert!(pos_final > core.threshold, "Pos goodness {} must be above threshold", pos_final);
         assert!(neg_final < core.threshold, "Neg goodness {} must be below threshold", neg_final);
@@ -747,9 +898,9 @@ mod tests {
         let mut core = AuraCore::new(12, 4, 2);
         let test_input = vec![0.5, 0.2, 0.9, -0.1, 0.4, 0.6, -0.3, 0.1, 0.8, -0.2, 0.5, 0.7];
         
-        let score_before = core.forward(&test_input);
+        let score_before = core.forward(&test_input, false, 0, 0);
         core.expand_rank();
-        let score_after = core.forward(&test_input);
+        let score_after = core.forward(&test_input, false, 0, 0);
         
         let diff = (score_after - score_before).abs();
         assert!(diff < 0.001, "Rank expansion should be 100% mathematically backward-compatible");
@@ -763,7 +914,7 @@ mod tests {
         // Arena-based optimized multiplication
         let start_arena = std::time::Instant::now();
         for _ in 0..1000 {
-            core.forward(&test_input);
+            core.forward(&test_input, false, 0, 0);
         }
         let arena_duration = start_arena.elapsed().as_micros();
 
@@ -852,5 +1003,43 @@ mod tests {
         
         let sum_sq: f32 = vector.iter().map(|&x| x * x).sum();
         assert!((sum_sq - 1.0).abs() < 1e-4, "Vector must be fully L2 normalised to unity");
+    }
+
+    #[test]
+    fn test_image_cnn_encoder_shapes() {
+        let mut core = AuraCore::new(32 * 32, 4, 3);
+        core.learning_rate = 0.1;
+        core.threshold = 3.0;
+
+        // Create a 32x32 square image (positive data) and a circle image (negative data)
+        let mut square_img = vec![0.0f32; 1024];
+        let mut circle_img = vec![0.0f32; 1024];
+
+        for y in 0..32 {
+            for x in 0..32 {
+                // Square: boundary in center
+                if y >= 8 && y <= 24 && x >= 8 && x <= 24 {
+                    square_img[y * 32 + x] = 1.0;
+                }
+                // Circle: radius-based
+                let dy = y as f32 - 16.0;
+                let dx = x as f32 - 16.0;
+                let dist = (dx * dx + dy * dy).sqrt();
+                if dist <= 10.0 {
+                    circle_img[y * 32 + x] = 1.0;
+                }
+            }
+        }
+
+        // Train the model on these images using the CNN encoder (is_image: true, 32x32)
+        for _ in 0..200 {
+            core.train_step(&square_img, &circle_img, true, 32, 32);
+        }
+
+        let pos_final = core.forward(&square_img, true, 32, 32);
+        let neg_final = core.forward(&circle_img, true, 32, 32);
+
+        assert!(pos_final > core.threshold, "Square goodness {} must be above threshold", pos_final);
+        assert!(neg_final < core.threshold, "Circle goodness {} must be below threshold", neg_final);
     }
 }
