@@ -1,0 +1,6 @@
+{
+  "name": "AuraNexus Rust Core",
+  "description": "A mathematical simulator and visualization dashboard for the AuraNexus Tensor Train core with Forward-Only learning and Orthogonal memory expansion.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
