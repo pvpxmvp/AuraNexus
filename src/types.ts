@@ -29,7 +29,7 @@ export interface ChatMessage {
   } | null;
 }
 
-export type ActiveTabType = "visualizer" | "rust-code" | "math-guide" | "memory-cache" | "network-stream" | "android-pacing" | "hardware-acceleration" | "android-ui-export" | "stability-precision";
+export type ActiveTabType = "visualizer" | "rust-code" | "math-guide" | "memory-cache" | "network-stream" | "android-pacing" | "hardware-acceleration" | "android-ui-export" | "stability-precision" | "memory-safety-benchmarking";
 export type SelectedRustFileType = "lib.rs" | "Cargo.toml" | "Unit Tests" | "aura-jni.cpp";
 export type ActiveBackendType = "CPU (NEON)" | "GPU (Vulkan)" | "NPU (NNAPI)";
 export type SelectedVulkanShaderFileType = "tensor_forward.comp" | "DynamicSelector.rs" | "PrecisionConverter.rs" | "ash_bridge.rs";
@@ -42,3 +42,4 @@ export type ExportStatusType = "idle" | "serializing" | "converting" | "saving" 
 export type SelectedComposeCodeFileType = "CrystallizationScreen.kt" | "ModelExporter.kt" | "BufferReceiverService.kt";
 export type ShapeResultType = "Uncertain" | "Square detected" | "Circle detected";
 export type ActiveStabilityCodeFileType = "lib.rs" | "AuraCoreBridge.kt" | "aura-jni.cpp";
+export type SelectedSafetyCodeFileType = "safe_arena.rs" | "benchmarks.rs" | "fuzz_parser.rs" | "cargo-fuzz-target.rs";

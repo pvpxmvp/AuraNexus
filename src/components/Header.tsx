@@ -4,7 +4,7 @@
  */
 
 import React from "react";
-import { Cpu, Network, Code, BookOpen, Zap, Smartphone, ShieldAlert } from "lucide-react";
+import { Cpu, Network, Code, BookOpen, Zap, Smartphone, ShieldAlert, Shield } from "lucide-react";
 import { useAuraContext } from "../store/AuraContext";
 
 export const Header: React.FC = () => {
@@ -124,6 +124,17 @@ export const Header: React.FC = () => {
         >
           <ShieldAlert className="w-3.5 h-3.5 text-blue-400" />
           Stability & Precision (TS №7)
+        </button>
+        <button
+          onClick={() => setActiveTab("memory-safety-benchmarking")}
+          className={`px-4 py-1.5 rounded-md text-xs font-medium transition flex items-center gap-2 cursor-pointer ${
+            activeTab === "memory-safety-benchmarking"
+              ? "bg-[#11162B] text-emerald-400 shadow-sm animate-pulse border border-emerald-500/20"
+              : "text-slate-500 hover:text-slate-300"
+          }`}
+        >
+          <Shield className="w-3.5 h-3.5 text-emerald-400" />
+          Memory Safety & Benchmarking (TS №9)
         </button>
       </div>
     </header>

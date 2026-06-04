@@ -20,7 +20,8 @@ import {
   ExportStatusType,
   SelectedComposeCodeFileType,
   ShapeResultType,
-  ActiveStabilityCodeFileType
+  ActiveStabilityCodeFileType,
+  SelectedSafetyCodeFileType
 } from "../types";
 import { generateSineWave, generateNoisySignal } from "../utils/generators";
 
@@ -210,6 +211,26 @@ interface AuraContextValue {
   setShapeResult: React.Dispatch<React.SetStateAction<ShapeResultType>>;
   activeStabilityCodeFile: ActiveStabilityCodeFileType;
   setActiveStabilityCodeFile: React.Dispatch<React.SetStateAction<ActiveStabilityCodeFileType>>;
+
+  // --- Memory Safety & Benchmarking (TS #9) ---
+  selectedSafetyCodeFile: SelectedSafetyCodeFileType;
+  setSelectedSafetyCodeFile: React.Dispatch<React.SetStateAction<SelectedSafetyCodeFileType>>;
+  unsafeCount: number;
+  setUnsafeCount: React.Dispatch<React.SetStateAction<number>>;
+  integrityValid: boolean;
+  setIntegrityValid: React.Dispatch<React.SetStateAction<boolean>>;
+  fuzzingActive: boolean;
+  setFuzzingActive: React.Dispatch<React.SetStateAction<boolean>>;
+  fuzzLogs: any[];
+  setFuzzLogs: React.Dispatch<React.SetStateAction<any[]>>;
+  benchRunning: boolean;
+  setBenchRunning: React.Dispatch<React.SetStateAction<boolean>>;
+  stressTesting10k: boolean;
+  setStressTesting10k: React.Dispatch<React.SetStateAction<boolean>>;
+  stress10kProgress: number;
+  setStress10kProgress: React.Dispatch<React.SetStateAction<number>>;
+  stress10kLogs: any[];
+  setStress10kLogs: React.Dispatch<React.SetStateAction<any[]>>;
 
   // --- Global Functions ---
   reinitializeNetwork: () => void;
@@ -466,6 +487,17 @@ export const AuraContextProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const [cnnEpochs, setCnnEpochs] = useState(0);
   const [shapeResult, setShapeResult] = useState<"Uncertain" | "Square detected" | "Circle detected">("Square detected");
   const [activeStabilityCodeFile, setActiveStabilityCodeFile] = useState<"lib.rs" | "AuraCoreBridge.kt" | "aura-jni.cpp">("lib.rs");
+
+  // --- Memory Safety & Benchmarking (TS #9) ---
+  const [selectedSafetyCodeFile, setSelectedSafetyCodeFile] = useState<SelectedSafetyCodeFileType>("safe_arena.rs");
+  const [unsafeCount, setUnsafeCount] = useState<number>(12);
+  const [integrityValid, setIntegrityValid] = useState<boolean>(true);
+  const [fuzzingActive, setFuzzingActive] = useState<boolean>(false);
+  const [fuzzLogs, setFuzzLogs] = useState<any[]>([]);
+  const [benchRunning, setBenchRunning] = useState<boolean>(false);
+  const [stressTesting10k, setStressTesting10k] = useState<boolean>(false);
+  const [stress10kProgress, setStress10kProgress] = useState<number>(0);
+  const [stress10kLogs, setStress10kLogs] = useState<any[]>([]);
 
   const updateSobelFeedback = (flatGrid: number[]) => {
     const width = 32;
@@ -867,6 +899,16 @@ export const AuraContextProvider: React.FC<{ children: React.ReactNode }> = ({ c
         cnnEpochs, setCnnEpochs,
         shapeResult, setShapeResult,
         activeStabilityCodeFile, setActiveStabilityCodeFile,
+
+        selectedSafetyCodeFile, setSelectedSafetyCodeFile,
+        unsafeCount, setUnsafeCount,
+        integrityValid, setIntegrityValid,
+        fuzzingActive, setFuzzingActive,
+        fuzzLogs, setFuzzLogs,
+        benchRunning, setBenchRunning,
+        stressTesting10k, setStressTesting10k,
+        stress10kProgress, setStress10kProgress,
+        stress10kLogs, setStress10kLogs,
 
         reinitializeNetwork,
         computeForwardTS,

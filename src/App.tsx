@@ -14,6 +14,7 @@ import { AndroidPacingTab } from "./components/AndroidPacingTab";
 import { HardwareAccelerationTab } from "./components/HardwareAccelerationTab";
 import { AndroidUiExportTab } from "./components/AndroidUiExportTab";
 import { StabilityPrecisionTab } from "./components/StabilityPrecisionTab";
+import { MemorySafetyBenchmarkingTab } from "./components/MemorySafetyBenchmarkingTab";
 import { useAuraContext } from "./store/AuraContext";
 import { AnimatePresence } from "motion/react";
 
@@ -40,6 +41,8 @@ const App: React.FC = () => {
         return <AndroidUiExportTab />;
       case "stability-precision":
         return <StabilityPrecisionTab />;
+      case "memory-safety-benchmarking":
+        return <MemorySafetyBenchmarkingTab />;
       default:
         return <VisualizerTab />;
     }
