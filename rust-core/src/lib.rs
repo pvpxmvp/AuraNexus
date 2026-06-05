@@ -145,29 +145,40 @@ impl TensorSnippetAnalyzer {
         }
         extracted_text.push_str(&text_lower);
 
-        let query_words: Vec<&str> = self.query.split_whitespace().collect();
-        if query_words.is_empty() { return 0.0; }
-
-        let mut matched = 0;
-        for qw in &query_words {
-            if extracted_text.contains(qw) {
-                matched += 1;
-            }
-        }
-
-        let similarity = matched as f32 / query_words.len() as f32;
+        let v_query = encode_to_vector(self.query.as_bytes(), 256);
+        let v_doc = encode_to_vector(extracted_text.as_bytes(), 256);
+        
+        let mut similarity = cosine_similarity(&v_query, &v_doc);
 
         // Surgical weed out context rule: If query is "автомобильные номера", reject pages mentioning "одежда" or "телефон"
         if self.query.contains("номера") {
             let invalid_contexts = ["одежда", "телефон", "размер", "одежды", "сотовый"];
             for &ctx in &invalid_contexts {
                 if text_lower.contains(ctx) {
-                    return similarity * 0.15; // Drastic demotion
+                    similarity *= 0.15; // Drastic demotion
                 }
             }
         }
 
         similarity
+    }
+}
+
+pub fn cosine_similarity(v1: &[f32], v2: &[f32]) -> f32 {
+    let mut dot_product = 0.0;
+    let mut norm_a = 0.0;
+    let mut norm_b = 0.0;
+    
+    for i in 0..v1.len().min(v2.len()) {
+        dot_product += v1[i] * v2[i];
+        norm_a += v1[i] * v1[i];
+        norm_b += v2[i] * v2[i];
+    }
+    
+    if norm_a == 0.0 || norm_b == 0.0 {
+        0.0
+    } else {
+        dot_product / (norm_a.sqrt() * norm_b.sqrt())
     }
 }
 
@@ -191,17 +202,33 @@ pub fn encode_to_vector(raw_bytes: &[u8], target_dim: usize) -> Vec<f32> {
             vector[i] = raw_bytes[byte_idx] as f32 / 255.0;
         }
     } else {
-        // Text Hashing trick: Slide word keys to indices and normalise
+        // TF-IDF inspired Semantic Hashing Trick
         let text = String::from_utf8_lossy(raw_bytes);
+        let mut word_counts = std::collections::HashMap::new();
+        
+        // Extract words and compute Term Frequencies
         for word in text.split_whitespace() {
+            let clean_word = word.trim_matches(|c: char| !c.is_alphanumeric()).to_lowercase();
+            if !clean_word.is_empty() {
+                *word_counts.entry(clean_word).or_insert(0) += 1;
+            }
+        }
+        
+        // Populate Hashing Trick Vector with sublinear TF scaling
+        for (word, count) in word_counts {
             let mut hash_val: u32 = 5381;
             for c in word.chars() {
                 hash_val = ((hash_val << 5).wrapping_add(hash_val)).wrapping_add(c as u32);
             }
             let index = (hash_val as usize) % target_dim;
-            vector[index] += 1.0;
+            let tf_weight = 1.0 + (count as f32).ln();
+            
+            // Apply higher weights to longer, more characteristic words
+            let length_bonus = if word.len() > 3 { 1.2 } else { 0.8 };
+            vector[index] += tf_weight * length_bonus;
         }
 
+        // L2 normalization to ensure unit length
         let norm_sq: f32 = vector.iter().map(|&x| x * x).sum();
         if norm_sq > 0.0 {
             let norm = norm_sq.sqrt();
@@ -212,6 +239,50 @@ pub fn encode_to_vector(raw_bytes: &[u8], target_dim: usize) -> Vec<f32> {
     }
 
     vector
+}
+
+/// Sequentially contracts input activations with each TensorCore using complex numbers
+pub fn forward_pass(input: &[f32], cores: &[TensorCore]) -> Vec<f32> {
+    use num_complex::Complex;
+
+    let mut current_state: Vec<Complex<f32>> = vec![Complex::new(1.0, 0.0)];
+    let mut start_idx = 0;
+
+    for k in 0..cores.len() {
+        let core = &cores[k];
+        let end_idx = (start_idx + core.d).min(input.len());
+        let x_k = &input[start_idx..end_idx];
+        start_idx += core.d;
+
+        let mut next_state: Vec<Complex<f32>> = vec![Complex::new(0.0, 0.0); core.r_curr];
+        for b in 0..core.r_curr {
+            let mut cell_sum = Complex::new(0.0, 0.0);
+            for a in 0..core.r_prev {
+                let mut weight_sum = Complex::new(0.0, 0.0);
+                for j in 0..core.d {
+                    if j < x_k.len() {
+                        let mag = core.weights.get(a, j, b);
+                        let phase = core.weights.get_phase(a, j, b);
+                        let w_complex = Complex::from_polar(mag, phase);
+                        weight_sum += w_complex * x_k[j];
+                    }
+                }
+                cell_sum += current_state[a] * weight_sum;
+            }
+            next_state[b] = cell_sum;
+        }
+
+        // Normalize state to maintain stability and avoid explosion
+        let norm_sq: f32 = next_state.iter().map(|c| c.norm_sq()).sum();
+        let norm = (norm_sq + 1e-9).sqrt();
+        for val in next_state.iter_mut() {
+            *val /= norm;
+        }
+        current_state = next_state;
+    }
+
+    // Return the final activation magnitude
+    current_state.iter().map(|c| c.norm()).collect()
 }
 
 /// A Cache-Aligned Arena Allocator designed to keep model parameters under L3 cache line boundaries.
@@ -1229,10 +1300,18 @@ pub extern "C" fn init_core(input_dim: i32, layers: i32, rank: i32) -> *mut Aura
     Box::into_raw(Box::new(core))
 }
 
+#[repr(C)]
+pub struct TrainingMetrics {
+    pub goodness: f32,
+    pub rank: u32,
+    pub converged: bool,
+    pub expanded: bool,
+}
+
 #[no_mangle]
-pub extern "C" fn train_step_core(ptr: *mut AuraCore, data_ptr: *const f32, length: i32) -> i32 {
+pub extern "C" fn train_step_core(ptr: *mut AuraCore, data_ptr: *const f32, length: i32) -> TrainingMetrics {
     if ptr.is_null() || data_ptr.is_null() || length <= 0 {
-        return -1;
+        return TrainingMetrics { goodness: -1.0, rank: 0, converged: false, expanded: false };
     }
     let core = unsafe { &mut *ptr };
     let data = unsafe { std::slice::from_raw_parts(data_ptr, length as usize) };
@@ -1244,15 +1323,21 @@ pub extern "C" fn train_step_core(ptr: *mut AuraCore, data_ptr: *const f32, leng
     }
     
     let status = core.train_step(data, &negative_data, false, 0, 0);
+    let pos_goodness = core.previous_pos_goodness;
     
-    let mut result = 0;
-    if status.converged {
-        result |= 1;
+    let mut active_rank = 0;
+    for c in &core.cores {
+        if c.r_curr > active_rank {
+            active_rank = c.r_curr;
+        }
     }
-    if status.expanded {
-        result |= 2;
+
+    TrainingMetrics {
+        goodness: pos_goodness,
+        rank: active_rank as u32,
+        converged: status.converged,
+        expanded: status.expanded,
     }
-    result
 }
 
 #[no_mangle]

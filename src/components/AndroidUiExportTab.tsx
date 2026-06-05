@@ -470,11 +470,17 @@ class BufferReceiverService : Service() {
         <div className="bg-[#0A0D1A] rounded-xl border border-slate-900 p-4 relative overflow-hidden">
           <span className="text-[10px] text-slate-500 font-mono block uppercase font-bold">КОНВЕРГЕНЦИЯ (GOODNESS)</span>
           <div className="text-xl font-bold font-mono mt-1 text-emerald-400">
-            {crystallizeMetrics.goodnessScore.toFixed(4)}
+            {crystallizeMetrics.goodnessScore === -1.0 ? "Waiting for core..." : crystallizeMetrics.goodnessScore.toFixed(4)}
           </div>
           <div className="text-[10px] font-mono mt-1.5 flex items-center gap-1 text-slate-400 font-semibold">
             <CheckCircle className="w-3.5 h-3.5 text-emerald-400" />
-            <span>{crystallizeMetrics.goodnessScore >= 1.5 ? "Сверхточная модель подтверждена" : "Идет кристаллизация..."}</span>
+            <span>
+              {crystallizeMetrics.goodnessScore === -1.0
+                ? "Инициализация тензора..."
+                : crystallizeMetrics.goodnessScore >= 1.5
+                ? "Сверхточная модель подтверждена"
+                : "Идет кристаллизация..."}
+            </span>
           </div>
         </div>
 

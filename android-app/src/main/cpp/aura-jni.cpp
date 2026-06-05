@@ -9,11 +9,18 @@
 #define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
+struct TrainingMetrics {
+    float goodness;
+    uint32_t rank;
+    bool converged;
+    bool expanded;
+};
+
 // External linkage declarations pointing to the static Rust core
 extern "C" {
     typedef void* CorePtr;
     CorePtr init_core(int input_dim, int layers, int rank);
-    int train_step_core(CorePtr ptr, const float* data, int length);
+    TrainingMetrics train_step_core(CorePtr ptr, const float* data, int length);
     void export_weights_core(CorePtr ptr, const char* path);
     int get_weights_size(CorePtr ptr);
     int get_weights_data(CorePtr ptr, float* out_buf, int max_len);
@@ -78,7 +85,7 @@ Java_com_auranexus_core_AuraNative_init(JNIEnv *env, jobject thiz, jint input_di
     }
 }
 
-extern "C" JNIEXPORT jint JNICALL
+extern "C" JNIEXPORT jobject JNICALL
 Java_com_auranexus_core_AuraNative_trainStep(JNIEnv *env, jobject thiz, jlong ptr, jfloatArray data) {
     if (ptr == 0) {
         LOGE("Critical error: nullptr dereference passed as core ptr in trainStep.");
@@ -86,12 +93,12 @@ Java_com_auranexus_core_AuraNative_trainStep(JNIEnv *env, jobject thiz, jlong pt
         if (exClass != nullptr) {
             env->ThrowNew(exClass, "AuraCore context pointer is null.");
         }
-        return -1;
+        return nullptr;
     }
 
     if (data == nullptr) {
         LOGE("Critical error: train data is null.");
-        return -1;
+        return nullptr;
     }
 
     CorePtr core = reinterpret_cast<CorePtr>(ptr);
@@ -100,18 +107,18 @@ Java_com_auranexus_core_AuraNative_trainStep(JNIEnv *env, jobject thiz, jlong pt
 
     if (body == nullptr) {
         LOGE("Could not lock JNI float array elements.");
-        return -1;
+        return nullptr;
     }
 
-    jint status = -1;
+    TrainingMetrics native_metrics = { -1.0f, 0, false, false };
     try {
         // Enforce safe memory encapsulation bounds checks using SafeTensorView
         SafeTensorView<float> view(body, static_cast<size_t>(len), true);
         
         // Pass checked SafeTensorView encapsulated data pointer to Rust stack context runs
-        status = train_step_core(core, view.get_raw_ptr(), static_cast<int>(view.size()));
+        native_metrics = train_step_core(core, view.get_raw_ptr(), static_cast<int>(view.size()));
         
-        LOGD("Java_com_auranexus_core_AuraNative_trainStep: completed. Status=%d", status);
+        LOGD("Java_com_auranexus_core_AuraNative_trainStep: completed. Goodness=%f, Rank=%d, Converged=%d, Expanded=%d", native_metrics.goodness, native_metrics.rank, native_metrics.converged, native_metrics.expanded);
     } catch (const std::exception& e) {
         LOGE("SafeTensorView access failure caught in JNI: %s", e.what());
         jclass exClass = env->FindClass("java/lang/IndexOutOfBoundsException");
@@ -121,7 +128,20 @@ Java_com_auranexus_core_AuraNative_trainStep(JNIEnv *env, jobject thiz, jlong pt
     }
 
     env->ReleaseFloatArrayElements(data, body, JNI_ABORT);
-    return status;
+
+    // Create Kotlin TrainingMetrics object
+    jclass clazz = env->FindClass("com/auranexus/core/TrainingMetrics");
+    if (clazz == nullptr) {
+        LOGE("Could not find TrainingMetrics class.");
+        return nullptr;
+    }
+    jmethodID minit = env->GetMethodID(clazz, "<init>", "(FIZZ)V");
+    if (minit == nullptr) {
+        LOGE("Could not find TrainingMetrics builder constructor with pattern (FIZZ)V.");
+        return nullptr;
+    }
+    jobject obj = env->NewObject(clazz, minit, native_metrics.goodness, static_cast<jint>(native_metrics.rank), static_cast<jboolean>(native_metrics.converged), static_cast<jboolean>(native_metrics.expanded));
+    return obj;
 }
 
 extern "C" JNIEXPORT void JNICALL

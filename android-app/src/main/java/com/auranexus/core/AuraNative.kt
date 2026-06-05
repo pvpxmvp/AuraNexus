@@ -37,13 +37,9 @@ class AuraNative(
      * Executes single gradient step using the JNI bridge.
      */
     @Throws(JNIException::class)
-    fun trainStep(data: FloatArray): Int {
+    fun trainStep(data: FloatArray): TrainingMetrics {
         checkValidity()
-        val result = trainStep(nativePtr, data)
-        if (result < 0) {
-            throw JNIException("JNI execution error during trainStep: returned status $result")
-        }
-        return result
+        return trainStep(nativePtr, data) ?: throw JNIException("JNI execution error during trainStep: returned null metrics")
     }
 
     /**
@@ -76,7 +72,7 @@ class AuraNative(
 
     // Native Interface External declarations mapped to aura-jni.cpp
     private external fun init(inputDim: Int, layers: Int, rank: Int): Long
-    private external fun trainStep(ptr: Long, data: FloatArray): Int
+    private external fun trainStep(ptr: Long, data: FloatArray): TrainingMetrics
     private external fun exportModel(ptr: Long, path: String)
     private external fun destroy(ptr: Long)
 

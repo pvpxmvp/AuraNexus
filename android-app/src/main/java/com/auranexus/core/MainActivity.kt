@@ -952,11 +952,11 @@ class MainActivity : ComponentActivity() {
 
                                             // Trigger authentic NDK JNI trainStep call on background pool
                                             val jniResult = withContext(Dispatchers.Default) {
-                                                aura?.trainStep(simulatedInputs) ?: 0
+                                                aura?.trainStep(simulatedInputs)
                                             }
 
-                                            val jniConverged = (jniResult and 1) != 0
-                                            val jniExpanded = (jniResult and 2) != 0
+                                            val jniConverged = jniResult?.converged ?: false
+                                            val jniExpanded = jniResult?.expanded ?: false
 
                                             step++
                                             progressPercent = step / totalSteps.toFloat()
@@ -964,29 +964,21 @@ class MainActivity : ComponentActivity() {
                                             totalVectors = step
 
                                             // Learning rate speeds up/slows down convergence curves
-                                            val speedMultiplier = (learningRate * 60f).coerceIn(0.5f, 5.0f)
-                                            val decayStepsNeeded = 450f / speedMultiplier
+
                                             
-                                            val limitTarget = if (step > decayStepsNeeded) {
-                                                (convergenceThreshold * 0.6f)
+
+
+                                            goodnessVal = jniResult?.goodness ?: -1.0f
+
+                                            if (goodnessVal == -1.0f) {
+                                                goodnessText = "Waiting for core..."
+                                                goodnessColor = Color(0xFFF59E0B)
                                             } else {
-                                                3.8f - (3.8f - (convergenceThreshold * 0.6f)) * (step.toFloat() / decayStepsNeeded)
+                                                val activeBlocks = ((4.5f - goodnessVal) * 2.8f).toInt().coerceIn(1, 10)
+                                                val barString = "■".repeat(activeBlocks) + "□".repeat(10 - activeBlocks)
+                                                goodnessText = "[$barString] %.4f".format(goodnessVal)
+                                                goodnessColor = if (goodnessVal < convergenceThreshold) Color(0xFF10B981) else Color(0xFFEF4444)
                                             }
-
-                                            goodnessVal += (limitTarget - goodnessVal) * 0.12f + (Random.nextFloat() * 0.05f - 0.025f)
-                                            if (goodnessVal < 0.1f) goodnessVal = 0.1f
-
-                                            // Force convergence state bounds
-                                            if (jniConverged) {
-                                                goodnessVal = goodnessVal.coerceAtMost(1.85f)
-                                            }
-
-                                            val activeBlocks = ((4.5f - goodnessVal) * 2.8f).toInt().coerceIn(1, 10)
-                                            val barString = "■".repeat(activeBlocks) + "□".repeat(10 - activeBlocks)
-                                            goodnessText = "[$barString] %.4f".format(goodnessVal)
-
-                                            // Dynamic text color for Energy Goodness Meter
-                                            goodnessColor = if (goodnessVal < convergenceThreshold) Color(0xFF10B981) else Color(0xFFEF4444)
 
                                             // Manage Rank expansion logic
                                             if (jniExpanded) {
@@ -995,14 +987,14 @@ class MainActivity : ComponentActivity() {
                                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                             }
 
-                                            val contractionRank = if (goodnessVal < convergenceThreshold) finalRank else {
+                                            val contractionRank = if (goodnessVal != -1.0f && goodnessVal < convergenceThreshold) finalRank else {
                                                 val limitBound = maxRank.coerceIn(subspaceParamsConstraint(finalRank), 16)
                                                 if (step < 150) (localRank + 2).coerceAtMost(limitBound)
                                                 else if (step < 450) (localRank + 1).coerceAtMost(limitBound)
                                                 else localRank.coerceAtMost(limitBound)
                                             }
 
-                                            activeSubspaceRankText = if (goodnessVal < convergenceThreshold) {
+                                            activeSubspaceRankText = if (goodnessVal != -1.0f && goodnessVal < convergenceThreshold) {
                                                 "R = $finalRank (Optimal / Fully Aligned)"
                                             } else {
                                                 "R = $contractionRank (Contraction phase)"

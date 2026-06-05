@@ -74,16 +74,52 @@ export function useTrainingLoop() {
       setCrystallizationProgress(progress);
       const currTime = new Date().toTimeString().split(" ")[0];
 
-      // Update metrics dynamically
-      const simulatedGoodness = 0.85 + (progress / 100) * 1.99;
-      const simulatedRate = offlineMode ? 0 : Math.round(2500 - (progress / 100) * 1200);
-      const currentRank = progress < 40 ? 8 : progress < 85 ? 6 : 4;
+      // Update metrics dynamically using actual forward contractions
+      const calculateRealGoodness = (input: number[], currCores: any[]): number => {
+        if (!currCores || currCores.length === 0) return -1.0;
+        let current_state = [1.0];
+        let goodness = 0.0;
+        let start_idx = 0;
+
+        for (let k = 0; k < currCores.length; k++) {
+          const core = currCores[k];
+          const x_k = input.slice(start_idx, start_idx + core.d);
+          start_idx += core.d;
+
+          const next_state: number[] = Array(core.r_curr).fill(0);
+          for (let b = 0; b < core.r_curr; b++) {
+            let cell_sum = 0.0;
+            for (let a = 0; a < core.r_prev; a++) {
+              let weight_sum = 0.0;
+              for (let j = 0; j < core.d; j++) {
+                if (j < x_k.length) {
+                  weight_sum += core.weights[a][j][b] * x_k[j];
+                }
+              }
+              cell_sum += current_state[a] * weight_sum;
+            }
+            next_state[b] = cell_sum;
+          }
+
+          const norm_sq = next_state.reduce((sum, val) => sum + val * val, 0);
+          goodness += norm_sq;
+
+          const norm = Math.sqrt(norm_sq + 1e-9);
+          current_state = next_state.map(val => val / norm);
+        }
+
+        return goodness;
+      };
+
+      const realGoodness = calculateRealGoodness(posInput, cores);
+      const activeRank = cores && cores.length > 0 ? Math.max(...cores.map(c => c.r_curr)) : 0;
+      const staticRate = offlineMode ? 0 : 1500;
       const cachedBatches = offlineMode ? Math.round((progress / 100) * 48) : 0;
 
       setCrystallizeMetrics({
-        vectorsSec: simulatedRate,
-        goodnessScore: simulatedGoodness,
-        activeRank: currentRank,
+        vectorsSec: staticRate,
+        goodnessScore: realGoodness,
+        activeRank: activeRank,
         cachedBatches: cachedBatches
       });
 
@@ -93,7 +129,7 @@ export function useTrainingLoop() {
           {
             id: Date.now() + "_c20",
             time: currTime,
-            msg: `CRYSTALLIZER: Tensor train rings contracting. Core indices converging. Goodness metrics converging nicely: ${(simulatedGoodness).toFixed(2)}`,
+            msg: `CRYSTALLIZER: Tensor train rings contracting. Core indices converging. Goodness metrics converging nicely: ${realGoodness === -1.0 ? "Waiting for core..." : realGoodness.toFixed(4)}`,
             type: "info"
           }
         ]);

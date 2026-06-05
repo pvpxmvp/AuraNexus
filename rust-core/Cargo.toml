@@ -10,3 +10,4 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 [dependencies]
 ndarray = "0.15"
 rand = "0.8"
+num-complex = "0.4"
