@@ -1,0 +1,31 @@
+name: Build AuraNexus APK
+on: [push]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Rust & Android
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - name: Setup Android SDK/NDK
+        uses: android-actions/setup-android@v3
+        with:
+          api-level: 34
+          ndk-version: r26b
+      - name: Cache Dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.gradle/caches
+          key: ${{ runner.os }}-deps-${{ hashFiles('**/Cargo.lock', '**/*.gradle.kts') }}
+      - name: Build Debug APK
+        run: ./gradlew :android-app:assembleDebug
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: aura-nexus-debug-apk
+          path: android-app/build/outputs/apk/debug/android-app-debug.apk
+          retention-days: 7

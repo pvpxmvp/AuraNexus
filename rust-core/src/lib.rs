@@ -1043,3 +1043,83 @@ mod tests {
         assert!(neg_final < core.threshold, "Circle goodness {} must be below threshold", neg_final);
     }
 }
+
+// =========================================================================
+// JNI Export Bridge Functions (extern "C") for Android NDK Compile Linkage
+// =========================================================================
+
+use std::ffi::CStr;
+use std::fs::File;
+use std::io::Write;
+
+#[no_mangle]
+pub extern "C" fn init_core(input_dim: i32, layers: i32, rank: i32) -> *mut AuraCore {
+    let core = AuraCore::new(input_dim as usize, layers as usize, rank as usize);
+    Box::into_raw(Box::new(core))
+}
+
+#[no_mangle]
+pub extern "C" fn train_step_core(ptr: *mut AuraCore, data_ptr: *const f32, length: i32) -> i32 {
+    if ptr.is_null() || data_ptr.is_null() || length <= 0 {
+        return -1;
+    }
+    let core = unsafe { &mut *ptr };
+    let data = unsafe { std::slice::from_raw_parts(data_ptr, length as usize) };
+    
+    // Generate negative data dynamically by negating the input elements
+    let mut negative_data = data.to_vec();
+    for val in negative_data.iter_mut() {
+        *val = -(*val);
+    }
+    
+    let status = core.train_step(data, &negative_data, false, 0, 0);
+    
+    let mut result = 0;
+    if status.converged {
+        result |= 1;
+    }
+    if status.expanded {
+        result |= 2;
+    }
+    result
+}
+
+#[no_mangle]
+pub extern "C" fn export_weights_core(ptr: *mut AuraCore, path: *const std::os::raw::c_char) {
+    if ptr.is_null() || path.is_null() {
+        return;
+    }
+    let core = unsafe { &mut *ptr };
+    let c_str = unsafe { CStr::from_ptr(path) };
+    let file_path = match c_str.to_str() {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    
+    if let Ok(mut file) = File::create(file_path) {
+        let _ = file.write_all(b"AURA_TT_MODEL_V1\n");
+        for (i, tensor_core) in core.cores.iter().enumerate() {
+            let dims = format!("core_{}:{}:{}:{}\n", i, tensor_core.r_prev, tensor_core.d, tensor_core.r_curr);
+            let _ = file.write_all(dims.as_bytes());
+            
+            let len = tensor_core.r_prev * tensor_core.d * tensor_core.r_curr;
+            let slice = unsafe { std::slice::from_raw_parts(tensor_core.weights.data, len) };
+            let bytes = unsafe {
+                std::slice::from_raw_parts(
+                    slice.as_ptr() as *const u8,
+                    len * std::mem::size_of::<f32>(),
+                )
+            };
+            let _ = file.write_all(bytes);
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn destroy_core(ptr: *mut AuraCore) {
+    if !ptr.is_null() {
+        unsafe {
+            let _b = Box::from_raw(ptr);
+        }
+    }
+}
