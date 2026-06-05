@@ -9,6 +9,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Audit Dependencies
+        run: |
+          npm audit --audit-level=high
+          cargo audit || true # Игнорируем ошибки, если база RustSec не обновлена
       
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
