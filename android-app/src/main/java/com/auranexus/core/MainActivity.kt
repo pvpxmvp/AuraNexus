@@ -1,625 +1,541 @@
 package com.auranexus.core
 
-import android.app.Activity
 import android.os.Bundle
-import android.widget.*
-import android.view.*
-import android.graphics.Color
-import android.graphics.Typeface
-import android.graphics.drawable.GradientDrawable
 import android.util.Log
-import android.text.TextWatcher
-import android.text.Editable
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.*
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.random.Random
 
-/**
- * MVP interface for the AuraNexus native training crystallizer.
- */
-class MainActivity : Activity() {
+class MainActivity : ComponentActivity() {
 
     private var aura: AuraNative? = null
-    private var isTrainingRunning = false
-    private var trainingThread: Thread? = null
-    private var trainStepCount = 0
-
-    private val logsList = mutableListOf<String>()
+    private var trainingJob: Job? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
-        // Root layout: vertical ScrollView for responsive scrolling
-        val rootScrollView = ScrollView(this).apply {
-            isFillViewport = true
-            setBackgroundColor(Color.parseColor("#090A0F"))
-        }
-
-        val mainContainer = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(40, 48, 40, 48)
-        }
-        rootScrollView.addView(mainContainer)
-
-        // Helper to generate custom layoutparams
-        fun lp(w: Int, h: Int, top: Int = 0, bottom: Int = 0, left: Int = 0, right: Int = 0) =
-            LinearLayout.LayoutParams(w, h).apply {
-                setMargins(left, top, right, bottom)
-            }
-
-        // --- SECTION 1: HEADER ---
-        val headerLayout = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER_HORIZONTAL
-            layoutParams = lp(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT, bottom = 40)
-        }
-
-        val titleView = TextView(this).apply {
-            text = "AURANEXUS CORE"
-            textSize = 24f
-            setTextColor(Color.parseColor("#22D3EE")) // Vibrant Cyan
-            typeface = Typeface.create("sans-serif", Typeface.BOLD)
-            gravity = Gravity.CENTER
-        }
-        headerLayout.addView(titleView)
-
-        val subtitleView = TextView(this).apply {
-            text = "LOW-RANK SUBSPACE CRYSTALLIZER"
-            textSize = 10f
-            setTextColor(Color.parseColor("#4B5563"))
-            typeface = Typeface.MONOSPACE
-            gravity = Gravity.CENTER
-            layoutParams = lp(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT, top = 5)
-        }
-        headerLayout.addView(subtitleView)
-        mainContainer.addView(headerLayout)
-
-        // --- SECTION 2: TASK SPECIFICATION CARD ---
-        val configCard = createCardLayout()
         
-        val cardTitle = TextView(this).apply {
-            text = "TASK SPECIFICATION & NLP PARSER"
-            textSize = 12f
-            setTextColor(Color.WHITE)
-            typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
-            layoutParams = lp(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT, bottom = 12)
-        }
-        configCard.addView(cardTitle)
-
-        // Search Prompt Input
-        val searchInput = EditText(this).apply {
-            hint = "E.g. распознавание номеров, видеоаналитика"
-            setHintTextColor(Color.parseColor("#4B5563"))
-            setTextColor(Color.WHITE)
-            textSize = 13f
-            setPadding(35, 28, 35, 28)
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.RECTANGLE
-                cornerRadius = 14f
-                setColor(Color.parseColor("#0C0E14"))
-                setStroke(2, Color.parseColor("#1F2937"))
-            }
-            layoutParams = lp(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT, bottom = 15)
-        }
-        configCard.addView(searchInput)
-
-        // Horizontally Scrollable Pills (Dictionary suggestions)
-        val pillScrollView = HorizontalScrollView(this).apply {
-            isHorizontalScrollBarEnabled = false
-            layoutParams = lp(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT, bottom = 25)
-        }
-        val pillContainer = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-        }
-        pillScrollView.addView(pillContainer)
-
-        val presets = arrayOf(
-            "Распознавание номеров",
-            "Видеоаналитика трафика",
-            "Экспресс-классификация"
-        )
-        for (preset in presets) {
-            pillContainer.addView(createPill(preset, searchInput))
-        }
-        configCard.addView(pillScrollView)
-
-        // Real-Time Badges for Parsed Parameters
-        val parsedTitle = TextView(this).apply {
-            text = "DETERMINISTIC JNI PARAMETERS"
-            textSize = 9f
-            setTextColor(Color.parseColor("#6B7280"))
-            typeface = Typeface.MONOSPACE
-            layoutParams = lp(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT, bottom = 8)
-        }
-        configCard.addView(parsedTitle)
-
-        val badgeRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            weightSum = 3f
-            layoutParams = lp(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT, bottom = 10)
-        }
-        badgeRow.addView(createBadgeView("INPUT DIM", "8", "DIM"))
-        badgeRow.addView(createBadgeView("LAYERS", "3", "LAYERS"))
-        badgeRow.addView(createBadgeView("TENSOR RANK", "4", "RANK"))
-        configCard.addView(badgeRow)
-
-        mainContainer.addView(configCard)
-
-        // --- SECTION 3: ACTION CONTROLS ---
-        val actionsLayout = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            layoutParams = lp(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT, top = 25, bottom = 25)
-        }
-
-        val btnStart = Button(this).apply {
-            text = "Start Crystallization"
-            setTextColor(Color.parseColor("#090A0F"))
-            textSize = 13f
-            typeface = Typeface.create("sans-serif", Typeface.BOLD)
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.RECTANGLE
-                cornerRadius = 16f
-                setColor(Color.parseColor("#10B981")) // Warm Emerald
-            }
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 2f).apply {
-                rightMargin = 15
+        setContent {
+            MaterialTheme {
+                CrystallizerScreen()
             }
         }
+    }
 
-        val btnStop = Button(this).apply {
-            text = "Stop"
-            setTextColor(Color.parseColor("#EF4444"))
-            textSize = 13f
-            typeface = Typeface.create("sans-serif", Typeface.BOLD)
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.RECTANGLE
-                cornerRadius = 16f
-                setColor(Color.parseColor("#181920"))
-                setStroke(2, Color.parseColor("#EF4444"))
-            }
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-            isEnabled = false
-        }
-        actionsLayout.addView(btnStart)
-        actionsLayout.addView(btnStop)
-        mainContainer.addView(actionsLayout)
-
-        // --- SECTION 4: PROGRESS & METRICS CARD ---
-        val metricsCard = createCardLayout()
-
-        val metricsTitle = TextView(this).apply {
-            text = "LIVE CONVERGENCE METRICS"
-            textSize = 12f
-            setTextColor(Color.WHITE)
-            typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
-            layoutParams = lp(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT, bottom = 12)
-        }
-        metricsCard.addView(metricsTitle)
-
-        // Horizontal Progress Bar
-        val progressBar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
-            max = 100
-            progress = 0
-            tag = "PROGRESS_BAR"
-            layoutParams = lp(LinearLayout.LayoutParams.MATCH_PARENT, 24, top = 5, bottom = 12)
-        }
-        metricsCard.addView(progressBar)
-
-        // Status description text
-        val progressStatusLabel = TextView(this).apply {
-            text = "Status: Idle"
-            textSize = 12f
-            setTextColor(Color.parseColor("#9CA3AF"))
-            typeface = Typeface.SANS_SERIF
-            tag = "PROGRESS_STATUS_LABEL"
-            layoutParams = lp(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT, bottom = 15)
-        }
-        metricsCard.addView(progressStatusLabel)
-
-        // Specific metrics view
-        val vectorCountView = createMetricRow("TOTAL VECTORS PROCESSED", "0", "VECTOR_COUNT")
-        val goodnessMeterView = createMetricRow("ENERGY GOODNESS METER", "[□□□□□□□□□□] 0.0000", "GOODNESS_METER")
-        val currentRankView = createMetricRow("ACTIVE SUBSPACE RANK", "Ready", "ACTIVE_RANK")
+    @Composable
+    fun CrystallizerScreen() {
+        var searchQuery by remember { mutableStateOf("") }
         
-        metricsCard.addView(vectorCountView)
-        metricsCard.addView(goodnessMeterView)
-        metricsCard.addView(currentRankView)
+        // Auto-derived params from searchQuery
+        val parsedParams = remember(searchQuery) {
+            parseQueryToParams(searchQuery)
+        }
+        val (inputDim, layers, rank) = parsedParams
 
-        mainContainer.addView(metricsCard)
-
-        // --- SECTION 5: LIVE CONSOLE TERMINAL ---
-        val consoleCard = createCardLayout()
+        var isRunning by remember { mutableStateOf(false) }
+        var progressPercent by remember { mutableStateOf(0f) }
+        var progressStatusText by remember { mutableStateOf("Status: Idle") }
+        var progressStatusColor by remember { mutableStateOf(Color(0xFF9CA3AF)) }
         
-        val consoleTitleBar = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            layoutParams = lp(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT, bottom = 10)
+        var totalVectors by remember { mutableStateOf(0) }
+        var goodnessText by remember { mutableStateOf("[□□□□□□□□□□] 0.0000") }
+        var activeSubspaceRankText by remember { mutableStateOf("Ready") }
+        
+        val logsList = remember { mutableStateListOf<String>() }
+        val coroutineScope = rememberCoroutineScope()
+        val scrollState = rememberScrollState()
+        val logScrollState = rememberScrollState()
+
+        // Sync helper for logs
+        fun addLog(msg: String) {
+            val timeStr = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+            logsList.add("[$timeStr] $msg")
+            if (logsList.size > 80) {
+                logsList.removeAt(0)
+            }
         }
 
-        val pulseIndicator = View(this).apply {
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.OVAL
-                setColor(Color.parseColor("#4B5563"))
-            }
-            tag = "PULSE_INDICATOR"
-            layoutParams = LinearLayout.LayoutParams(16, 16).apply {
-                rightMargin = 12
-            }
-        }
-        consoleTitleBar.addView(pulseIndicator)
-
-        val consoleTitle = TextView(this).apply {
-            text = "JNI CONSOLE MONITOR"
-            textSize = 11f
-            setTextColor(Color.parseColor("#9CA3AF"))
-            typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
-        }
-        consoleTitleBar.addView(consoleTitle)
-        consoleCard.addView(consoleTitleBar)
-
-        val logScroller = ScrollView(this).apply {
-            tag = "LOGS_SCROLLER"
-            layoutParams = lp(LinearLayout.LayoutParams.MATCH_PARENT, 250)
-            setBackgroundColor(Color.parseColor("#06070B"))
-            setPadding(15, 15, 15, 15)
-        }
-        val logTextView = TextView(context).apply {
-            tag = "LOGS_CONSOLE"
-            text = "Console initialized. Ready for low-rank crystallization."
-            textSize = 11f
-            setTextColor(Color.parseColor("#10B981")) // Matrix green
-            typeface = Typeface.MONOSPACE
-            lineSpacingMultiplier = 1.15f
-        }
-        logScroller.addView(logTextView)
-        consoleCard.addView(logScroller)
-
-        mainContainer.addView(consoleCard)
-
-        // --- LOGIC: TEXT NLP ANALYSIS ---
-        val updateParamsFromQuery = { query: String ->
-            val (dim, lay, rnk) = parseQueryToParams(query)
-            updateParsedBadges(dim, lay, rnk)
+        // Auto Scroll Console when new log arrives
+        LaunchedEffect(logsList.size) {
+            logScrollState.animateScrollTo(logScrollState.maxValue)
         }
 
-        searchInput.addTextChangedListener(object : TextWatcher {
-            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
-            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
-                updateParamsFromQuery(s?.toString() ?: "")
-            }
-            override fun afterTextChanged(s: Editable?) {}
-        })
-
-        // On-click: start crystallization
-        btnStart.setOnClickListener {
-            val queryText = searchInput.text.toString()
-            val (inputDim, layers, rank) = parseQueryToParams(queryText)
-
-            // Setup state
-            btnStart.isEnabled = false
-            btnStart.setTextColor(Color.parseColor("#4B5563"))
-            btnStart.background = GradientDrawable().apply {
-                shape = GradientDrawable.RECTANGLE
-                cornerRadius = 16f
-                setColor(Color.parseColor("#181920"))
-            }
-
-            btnStop.isEnabled = true
-            btnStop.setTextColor(Color.WHITE)
-            btnStop.background = GradientDrawable().apply {
-                shape = GradientDrawable.RECTANGLE
-                cornerRadius = 16f
-                setColor(Color.parseColor("#EF4444"))
-            }
-
-            // Animate terminal pulse
-            pulseIndicator.background = GradientDrawable().apply {
-                shape = GradientDrawable.OVAL
-                setColor(Color.parseColor("#38BDF8")) // Running Blue
-            }
-
-            // Clean logs
-            logsList.clear()
-            addLogMessage("JNI: Halting legacy buffers and freeing allocated heaps...", logTextView, logScroller)
-
-            // Safely close previous Aura instance
-            try {
-                aura?.close()
+        // Handle clean shutdown of legacy native instance when screen closes or pauses
+        DisposableEffect(Unit) {
+            addLog("Console initialized. Ready for low-rank crystallization.")
+            onDispose {
+                trainingJob?.cancel()
+                try {
+                    aura?.close()
+                } catch (e: Exception) {
+                    Log.e("AuraNexus", "Failed to close native core upon destruction: " + e.message)
+                }
                 aura = null
-            } catch (e: Exception) {
-                Log.e("AuraNexus", "Failed to close legacy instance: " + e.message)
             }
+        }
 
-            // Instantiate active native core
-            try {
-                addLogMessage("JNI: Aligning CacheAlignedArena with configuration: inputDim=$inputDim, layers=$layers, rank=$rank", logTextView, logScroller)
-                aura = AuraNative(inputDim, layers, rank)
-                addLogMessage("JNI: Established core pointer at context address: 0x${java.lang.Long.toHexString(aura.hashCode().toLong())}", logTextView, logScroller)
-                
-                trainStepCount = 0
-                isTrainingRunning = true
+        Surface(
+            modifier = Modifier.fillMaxSize(),
+            color = Color(0xFF090A0F)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(scrollState)
+                    .padding(horizontal = 20.dp, vertical = 24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                // --- SECTION 1: HEADER ---
+                Column(
+                    modifier = Modifier.padding(bottom = 20.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        text = "AURANEXUS CORE",
+                        color = Color(0xFF22D3EE),
+                        fontSize = 24.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.SansSerif,
+                        textAlign = TextAlign.Center
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "LOW-RANK SUBSPACE CRYSTALLIZER",
+                        color = Color(0xFF4B5563),
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Normal,
+                        fontFamily = FontFamily.Monospace,
+                        textAlign = TextAlign.Center
+                    )
+                }
 
-                progressBar.progress = 0
-                progressBar.max = 100
-                progressStatusLabel.text = "Crystallization Progress: 0%"
-                progressStatusLabel.textColor = Color.parseColor("#38BDF8")
+                // --- SECTION 2: TASK SPECIFICATION CARD ---
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 16.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF11131E)),
+                    shape = RoundedCornerShape(16.dp),
+                    border = BorderStroke(1.dp, Color(0xFF1F2435))
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(
+                            text = "TASK SPECIFICATION & NLP PARSER",
+                            color = Color.White,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Monospace,
+                            modifier = Modifier.padding(bottom = 8.dp)
+                        )
 
-                // Commencing Thread loop
-                trainingThread = Thread {
-                    var currentStep = 0
-                    var goodnessScore = 0.85f
+                        // Outlined Text Field
+                        OutlinedTextField(
+                            value = searchQuery,
+                            onValueChange = { searchQuery = it },
+                            placeholder = { Text("E.g. распознавание номеров, видеоаналитика", color = Color(0xFF4B5563)) },
+                            singleLine = true,
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedTextColor = Color.White,
+                                unfocusedTextColor = Color.White,
+                                focusedContainerColor = Color(0xFF0C0E14),
+                                unfocusedContainerColor = Color(0xFF0C0E14),
+                                focusedBorderColor = Color(0xFF22D3EE),
+                                unfocusedBorderColor = Color(0xFF1F2937),
+                                cursorColor = Color(0xFF22D3EE)
+                            ),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 12.dp)
+                        )
 
-                    addLogMessage("CRYSTALLIZER: Subspace vector projection commencing.", logTextView, logScroller)
-
-                    while (isTrainingRunning && currentStep < 100) {
-                        try {
-                            // Synthesize mock training vectors conforming to user dimensions
-                            val simulatedInputs = FloatArray(inputDim) { i ->
-                                val offsetValue = (i + 1) * 0.125f * (currentStep + 1)
-                                val modulationWave = (0.75f + Math.sin(currentStep.toDouble() * 0.15).toFloat() * 0.25f)
-                                offsetValue * modulationWave
-                            }
-
-                            // Run underlying native train computations
-                            val statusResult = aura?.trainStep(simulatedInputs) ?: -1
-                            
-                            currentStep++
-                            trainStepCount++
-
-                            // Simulated physical goodness convergence formula
-                            goodnessScore += (2.42f - goodnessScore) * 0.045f + (Math.random().toFloat() * 0.015f - 0.007f)
-                            if (goodnessScore > 2.68f) goodnessScore = 2.68f
-
-                            val stepToShow = currentStep
-                            val goodnessToShow = goodnessScore
-                            val statusToShow = statusResult
-
-                            runOnUiThread {
-                                progressBar.progress = stepToShow
-                                progressStatusLabel.text = "Crystallizing Subspace Core: $stepToShow%"
-                                
-                                val vecCountVal = findViewWithTag<TextView>("M_VAL_VECTOR_COUNT")
-                                val goodnessVal = findViewWithTag<TextView>("M_VAL_GOODNESS_METER")
-                                val activeRankVal = findViewWithTag<TextView>("M_VAL_ACTIVE_RANK")
-
-                                vecCountVal?.text = "$stepToShow vectors"
-
-                                // ASCII visual goodness rendering
-                                val activeBlocksCount = (goodnessToShow * 3.7f).toInt().coerceIn(1, 10)
-                                val barString = "■".repeat(activeBlocksCount) + "□".repeat(10 - activeBlocksCount)
-                                goodnessVal?.text = "[$barString] %.4f".format(goodnessToShow)
-
-                                // Dynamic low-rank contraction display
-                                val contractionRank = if (stepToShow < 30) rank + 2 else if (stepToShow < 75) rank + 1 else rank
-                                activeRankVal?.text = "R = $contractionRank (Contraction phase)"
-
-                                // Periodic descriptive logs indicating physical convergence
-                                if (stepToShow == 5) {
-                                    addLogMessage("JNI: Core vectors aligned. Aligning low-rank manifolds.", logTextView, logScroller)
-                                } else if (stepToShow == 25) {
-                                    addLogMessage("STREAMER: Vector feed optimal rate inside CacheAlignedArena.", logTextView, logScroller)
-                                } else if (stepToShow == 50) {
-                                    addLogMessage("RING_BUFFER: Optimization active. Convergence goodness matches: %.4f".format(goodnessToShow), logTextView, logScroller)
-                                } else if (stepToShow == 80) {
-                                    addLogMessage("CORE: Structural tensor consolidation verified. Completing orthogonal mapping.", logTextView, logScroller)
+                        // Pill presets
+                        val presets = listOf("Распознавание номеров", "Видеоаналитика трафика", "Экспресс-классификация")
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState())
+                                .padding(bottom = 16.dp)
+                        ) {
+                            presets.forEach { preset ->
+                                KeyPill(title = preset) {
+                                    searchQuery = preset
                                 }
                             }
+                        }
 
-                            Thread.sleep(150) // High pacing interval
-                        } catch (e: Exception) {
-                            runOnUiThread {
-                                addLogMessage("ERROR: Training loop exception details: ${e.message}", logTextView, logScroller)
-                                stopTrainingUI(btnStart, btnStop, pulseIndicator, progressStatusLabel, false)
+                        Text(
+                            text = "DETERMINISTIC JNI PARAMETERS",
+                            color = Color(0xFF6B7280),
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Monospace,
+                            modifier = Modifier.padding(bottom = 6.dp)
+                        )
+
+                        // Badge parameters
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            BadgeItem(modifier = Modifier.weight(1f), title = "INPUT DIM", value = inputDim.toString())
+                            BadgeItem(modifier = Modifier.weight(1f), title = "LAYERS", value = layers.toString())
+                            BadgeItem(modifier = Modifier.weight(1f), title = "TENSOR RANK", value = rank.toString())
+                        }
+                    }
+                }
+
+                // --- SECTION 3: ACTION CONTROLS ---
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    // Start Button
+                    Button(
+                        onClick = {
+                            if (!isRunning) {
+                                isRunning = true
+                                progressPercent = 0f
+                                progressStatusText = "Crystallization Progress: 0%"
+                                progressStatusColor = Color(0xFF38BDF8)
+                                logsList.clear()
+                                addLog("JNI: Halting legacy buffers and freeing allocated heaps...")
+
+                                // Safely handle native close
+                                try {
+                                    aura?.close()
+                                    aura = null
+                                } catch (e: Exception) {
+                                    Log.e("AuraNexus", "Failed to close legacy instance: " + e.message)
+                                }
+
+                                // Create training job
+                                trainingJob = coroutineScope.launch {
+                                    try {
+                                        addLog("JNI: Aligning CacheAlignedArena with configuration: inputDim=$inputDim, layers=$layers, rank=$rank")
+                                        aura = AuraNative(inputDim, layers, rank)
+                                        addLog("JNI: Established core pointer at context address: 0x${java.lang.Long.toHexString(aura.hashCode().toLong())}")
+                                        addLog("CRYSTALLIZER: Subspace vector projection commencing.")
+
+                                        var step = 0
+                                        var goodnessScore = 0.85f
+
+                                        while (step < 100 && isRunning) {
+                                            // Mock active input dimension arrays
+                                            val simulatedInputs = FloatArray(inputDim) { i ->
+                                                val offsetValue = (i + 1) * 0.125f * (step + 1)
+                                                val modulationWave = (0.75f + Math.sin(step.toDouble() * 0.15).toFloat() * 0.25f)
+                                                offsetValue * modulationWave
+                                            }
+
+                                            // Trigger JNI train step on a background worker thread
+                                            withContext(Dispatchers.Default) {
+                                                aura?.trainStep(simulatedInputs)
+                                            }
+
+                                            step++
+                                            progressPercent = step / 100f
+                                            progressStatusText = "Crystallizing Subspace Core: $step%"
+                                            totalVectors = step
+
+                                            goodnessScore += (2.42f - goodnessScore) * 0.045f + (Random.nextFloat() * 0.015f - 0.007f)
+                                            if (goodnessScore > 2.68f) goodnessScore = 2.68f
+
+                                            val activeBlocksCount = (goodnessScore * 3.7f).toInt().coerceIn(1, 10)
+                                            val barString = "■".repeat(activeBlocksCount) + "□".repeat(10 - activeBlocksCount)
+                                            goodnessText = "[$barString] %.4f".format(goodnessScore)
+
+                                            val contractionRank = if (step < 30) rank + 2 else if (step < 75) rank + 1 else rank
+                                            activeSubspaceRankText = "R = $contractionRank (Contraction phase)"
+
+                                            if (step == 5) {
+                                                addLog("JNI: Core vectors aligned. Aligning low-rank manifolds.")
+                                            } else if (step == 25) {
+                                                addLog("STREAMER: Vector feed optimal rate inside CacheAlignedArena.")
+                                            } else if (step == 50) {
+                                                addLog("RING_BUFFER: Optimization active. Convergence goodness matches: %.4f".format(goodnessScore))
+                                            } else if (step == 80) {
+                                                addLog("CORE: Structural tensor consolidation verified. Completing orthogonal mapping.")
+                                            }
+
+                                            delay(150)
+                                        }
+
+                                        if (isRunning) {
+                                            addLog("COMPOSE: Crystallization complete! Subspace weights crystallized onto persistent storage.")
+                                            progressStatusText = "Crystallization Complete! Fully Converged"
+                                            progressStatusColor = Color(0xFF10B981)
+                                            activeSubspaceRankText = "R = $rank (Optimal)"
+                                        }
+
+                                    } catch (e: CancellationException) {
+                                        // Standard Coroutine Cancel
+                                    } catch (e: Exception) {
+                                        addLog("ERROR: JNI connection error during core init: ${e.message}")
+                                        progressStatusText = "Error during crystallization"
+                                        progressStatusColor = Color(0xFFEF4444)
+                                    } finally {
+                                        isRunning = false
+                                    }
+                                }
                             }
-                            isTrainingRunning = false
-                        }
+                        },
+                        modifier = Modifier.weight(2f),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (isRunning) Color(0xFF181920) else Color(0xFF10B981),
+                            contentColor = if (isRunning) Color(0xFF4B5563) else Color(0xFF090A0F)
+                        ),
+                        shape = RoundedCornerShape(10.dp),
+                        enabled = !isRunning
+                    ) {
+                        Text(
+                            text = "Start Crystallization",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 13.sp
+                        )
                     }
 
-                    if (isTrainingRunning) {
-                        runOnUiThread {
-                            addLogMessage("COMPOSE: Crystallization complete! Subspace weights crystallized onto persistent storage.", logTextView, logScroller)
-                            progressStatusLabel.text = "Crystallization Complete! Fully Converged"
-                            progressStatusLabel.textColor = Color.parseColor("#10B981")
-                            
-                            val activeRankVal = findViewWithTag<TextView>("M_VAL_ACTIVE_RANK")
-                            activeRankVal?.text = "R = $rank (Optimal)"
-                            
-                            stopTrainingUI(btnStart, btnStop, pulseIndicator, progressStatusLabel, true)
+                    // Stop Button
+                    Button(
+                        onClick = {
+                            if (isRunning) {
+                                isRunning = false
+                                trainingJob?.cancel()
+                                addLog("SYSTEM: Manual termination requested. Interrupted training loop cleanly.")
+                                progressStatusText = "Crystallization Force Stopped"
+                                progressStatusColor = Color(0xFFEF4444)
+                            }
+                        },
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(0xFF181920),
+                            contentColor = Color(0xFFEF4444)
+                        ),
+                        shape = RoundedCornerShape(10.dp),
+                        border = BorderStroke(1.dp, Color(0xFFEF4444)),
+                        enabled = isRunning
+                    ) {
+                        Text(
+                            text = "Stop",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 13.sp
+                        )
+                    }
+                }
+
+                // --- SECTION 4: PROGRESS & METRICS CARD ---
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 16.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF11131E)),
+                    shape = RoundedCornerShape(16.dp),
+                    border = BorderStroke(1.dp, Color(0xFF1F2435))
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(
+                            text = "LIVE CONVERGENCE METRICS",
+                            color = Color.White,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Monospace,
+                            modifier = Modifier.padding(bottom = 12.dp)
+                        )
+
+                        // Linear Progress Indicator
+                        LinearProgressIndicator(
+                            progress = progressPercent,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(8.dp)
+                                .padding(vertical = 2.dp),
+                            color = if (progressStatusColor == Color(0xFF10B981)) Color(0xFF10B981) else Color(0xFF38BDF8),
+                            trackColor = Color(0xFF1F2435)
+                        )
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        Text(
+                            text = progressStatusText,
+                            color = progressStatusColor,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium,
+                            fontFamily = FontFamily.SansSerif,
+                            modifier = Modifier.padding(bottom = 12.dp)
+                        )
+
+                        HorizontalDivider(color = Color(0xFF1F2435), thickness = 1.dp)
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        MetricRow(title = "TOTAL VECTORS PROCESSED", value = "$totalVectors vectors")
+                        MetricRow(title = "ENERGY GOODNESS METER", value = goodnessText)
+                        MetricRow(title = "ACTIVE SUBSPACE RANK", value = activeSubspaceRankText)
+                    }
+                }
+
+                // --- SECTION 5: LIVE CONSOLE TERMINAL ---
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF11131E)),
+                    shape = RoundedCornerShape(16.dp),
+                    border = BorderStroke(1.dp, Color(0xFF1F2435))
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(bottom = 8.dp)
+                        ) {
+                            // Pulse dot indicator
+                            Box(
+                                modifier = Modifier
+                                    .size(8.dp)
+                                    .background(
+                                        color = if (isRunning) Color(0xFF38BDF8) else if (progressStatusColor == Color(0xFF10B981)) Color(0xFF10B981) else Color(0xFF4B5563),
+                                        shape = RoundedCornerShape(4.dp)
+                                    )
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "JNI CONSOLE MONITOR",
+                                color = Color(0xFF9CA3AF),
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
+
+                        // Terminal Scroll Area
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(120.dp)
+                                .background(Color(0xFF06070B), shape = RoundedCornerShape(8.dp))
+                                .border(1.dp, Color(0xFF1F2435), shape = RoundedCornerShape(8.dp))
+                                .padding(10.dp)
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .verticalScroll(logScrollState)
+                            ) {
+                                logsList.forEach { logLine ->
+                                    Text(
+                                        text = logLine,
+                                        color = if (logLine.contains("ERROR")) Color(0xFFEF4444) else Color(0xFF10B981),
+                                        fontSize = 11.sp,
+                                        fontFamily = FontFamily.Monospace,
+                                        modifier = Modifier.fillMaxWidth()
+                                    )
+                                }
+                            }
                         }
                     }
-                    isTrainingRunning = false
-                }.apply { start() }
-
-            } catch (e: Exception) {
-                addLogMessage("ERROR: JNI connection error during core init: ${e.message}", logTextView, logScroller)
-                stopTrainingUI(btnStart, btnStop, pulseIndicator, progressStatusLabel, false)
-            }
-        }
-
-        // On-click: stop crystallization
-        btnStop.setOnClickListener {
-            if (isTrainingRunning) {
-                isTrainingRunning = false
-                addLogMessage("SYSTEM: Manual termination requested. Interrupted training loop cleanly.", logTextView, logScroller)
-                progressStatusLabel.text = "Crystallization Force Stopped"
-                progressStatusLabel.textColor = Color.parseColor("#EF4444")
-                stopTrainingUI(btnStart, btnStop, pulseIndicator, progressStatusLabel, false)
-            }
-        }
-
-        // Trigger initial parse setting
-        updateParamsFromQuery("")
-        
-        setContentView(rootScrollView)
-    }
-
-    private fun stopTrainingUI(
-        startBtn: Button,
-        stopBtn: Button,
-        pulseInd: View,
-        statusLbl: TextView,
-        wasSuccess: Boolean
-    ) {
-        startBtn.isEnabled = true
-        startBtn.setTextColor(Color.parseColor("#090A0F"))
-        startBtn.background = GradientDrawable().apply {
-            shape = GradientDrawable.RECTANGLE
-            cornerRadius = 16f
-            setColor(Color.parseColor("#10B981"))
-        }
-
-        stopBtn.isEnabled = false
-        stopBtn.setTextColor(Color.parseColor("#4B5563"))
-        stopBtn.background = GradientDrawable().apply {
-            shape = GradientDrawable.RECTANGLE
-            cornerRadius = 16f
-            setColor(Color.parseColor("#181920"))
-        }
-
-        pulseInd.background = GradientDrawable().apply {
-            shape = GradientDrawable.OVAL
-            setColor(if (wasSuccess) Color.parseColor("#10B981") else Color.parseColor("#EF4444"))
-        }
-    }
-
-    private fun createCardLayout(): LinearLayout {
-        return LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(35, 35, 35, 35)
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.RECTANGLE
-                cornerRadius = 24f
-                setColor(Color.parseColor("#11131E")) // Card obsidian
-                setStroke(2, Color.parseColor("#1F2435"))
-            }
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply {
-                bottomMargin = 25
+                }
             }
         }
     }
 
-    private fun createPill(title: String, targetInput: EditText): View {
-        return Button(this).apply {
-            text = title
-            setTextColor(Color.parseColor("#9CA3AF"))
-            textSize = 10.5f
-            transformationMethod = null // Disable default UPPERCASE
-            typeface = Typeface.create("sans-serif", Typeface.NORMAL)
-            setPadding(30, 15, 30, 15)
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.RECTANGLE
-                cornerRadius = 35f
-                setColor(Color.parseColor("#181B27"))
-                setStroke(2, Color.parseColor("#262C3F"))
-            }
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply {
-                rightMargin = 15
-            }
-            setOnClickListener {
-                targetInput.setText(title)
-            }
-        }
-    }
-
-    private fun createBadgeView(title: String, defaultValue: String, elementTag: String): LinearLayout {
-        val container = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            setPadding(15, 20, 15, 20)
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.RECTANGLE
-                cornerRadius = 16f
-                setColor(Color.parseColor("#181B2A"))
-                setStroke(2, Color.parseColor("#23293D"))
-            }
-            layoutParams = LinearLayout.LayoutParams(
-                0,
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                1f
-            ).apply {
-                leftMargin = 6
-                rightMargin = 6
-            }
-        }
-
-        val tView = TextView(this).apply {
-            text = title
-            textSize = 8.5f
-            setTextColor(Color.parseColor("#4B5563"))
-            typeface = Typeface.MONOSPACE
-            gravity = Gravity.CENTER
-        }
-
-        val vView = TextView(this).apply {
-            text = defaultValue
-            textSize = 17f
-            setTextColor(Color.parseColor("#22D3EE"))
-            typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
-            gravity = Gravity.CENTER
-            tag = elementTag
-        }
-
-        container.addView(tView)
-        container.addView(vView)
-        return container
-    }
-
-    private fun updateParsedBadges(inputDim: Int, layers: Int, rank: Int) {
-        val dimView = findViewWithTag<TextView>("DIM")
-        val layersView = findViewWithTag<TextView>("LAYERS")
-        val rankView = findViewWithTag<TextView>("RANK")
-
-        dimView?.text = inputDim.toString()
-        layersView?.text = layers.toString()
-        rankView?.text = rank.toString()
-    }
-
-    private fun createMetricRow(title: String, defaultValue: String, elementTagSuffix: String): LinearLayout {
-        val container = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, 10, 0, 10)
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
+    @Composable
+    fun KeyPill(title: String, onClick: () -> Unit) {
+        Box(
+            modifier = Modifier
+                .padding(end = 8.dp)
+                .background(Color(0xFF181B27), shape = RoundedCornerShape(18.dp))
+                .border(1.dp, Color(0xFF262C3F), shape = RoundedCornerShape(18.dp))
+                .clickable(onClick = onClick)
+                .padding(horizontal = 14.dp, vertical = 6.dp)
+        ) {
+            Text(
+                text = title,
+                color = Color(0xFF9CA3AF),
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Normal,
+                fontFamily = FontFamily.SansSerif
             )
         }
+    }
 
-        val titleView = TextView(this).apply {
-            text = title
-            textSize = 10f
-            setTextColor(Color.parseColor("#6B7280"))
-            typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
-            layoutParams = LinearLayout.LayoutParams(
-                0,
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                1.5f
+    @Composable
+    fun BadgeItem(modifier: Modifier = Modifier, title: String, value: String) {
+        Column(
+            modifier = modifier
+                .background(Color(0xFF181B2A), shape = RoundedCornerShape(8.dp))
+                .border(1.dp, Color(0xFF23293D), shape = RoundedCornerShape(8.dp))
+                .padding(horizontal = 8.dp, vertical = 10.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                text = title,
+                color = Color(0xFF4B5563),
+                fontSize = 8.5.sp,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Center
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = value,
+                color = Color(0xFF22D3EE),
+                fontSize = 17.sp,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Center
             )
         }
+    }
 
-        val valView = TextView(this).apply {
-            text = defaultValue
-            textSize = 12f
-            setTextColor(Color.WHITE)
-            typeface = Typeface.MONOSPACE
-            gravity = Gravity.RIGHT
-            tag = "M_VAL_$elementTagSuffix"
-            layoutParams = LinearLayout.LayoutParams(
-                0,
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                1f
+    @Composable
+    fun MetricRow(title: String, value: String) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 4.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = title,
+                color = Color(0xFF6B7280),
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Bold,
+                fontFamily = FontFamily.Monospace,
+                modifier = Modifier.weight(1.5f)
+            )
+            Text(
+                text = value,
+                color = Color.White,
+                fontSize = 12.sp,
+                fontFamily = FontFamily.Monospace,
+                textAlign = TextAlign.End,
+                modifier = Modifier.weight(1f)
             )
         }
-
-        container.addView(titleView)
-        container.addView(valView)
-        return container
     }
 
     private fun parseQueryToParams(query: String): Triple<Int, Int, Int> {
@@ -652,44 +568,5 @@ class MainActivity : Activity() {
         rank = rank.coerceIn(2, 12)
 
         return Triple(inputDim, layers, rank)
-    }
-
-    private fun addLogMessage(msg: String, view: TextView, scroll: ScrollView) {
-        val timeStr = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
-        val formattedMsg = "[$timeStr] $msg"
-        logsList.add(formattedMsg)
-        if (logsList.size > 80) {
-            logsList.removeAt(0)
-        }
-        view.text = logsList.joinToString("\n")
-        scroll.post {
-            scroll.fullScroll(View.FOCUS_DOWN)
-        }
-    }
-
-    override fun onPause() {
-        super.onPause()
-        if (isTrainingRunning) {
-            isTrainingRunning = false
-            // Will let background thread stop on the next iteration safely
-        }
-    }
-
-    override fun onStop() {
-        super.onStop()
-        if (isTrainingRunning) {
-            isTrainingRunning = false
-        }
-    }
-
-    override fun onDestroy() {
-        super.onDestroy()
-        isTrainingRunning = false
-        try {
-            aura?.close()
-        } catch (e: Exception) {
-            Log.e("AuraNexus", "Failed to close native core upon destruction: " + e.message)
-        }
-        aura = null
     }
 }
