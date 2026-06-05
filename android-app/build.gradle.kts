@@ -12,7 +12,6 @@ android {
         minSdk = 24
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        consumerProguardFiles("proguard-rules.pro")
 
         ndk {
             // Apply exclusive arm64-v8a architecture filter
