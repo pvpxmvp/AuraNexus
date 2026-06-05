@@ -27,6 +27,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
+            ~/.cargo/bin
             ~/.cargo/registry
             ~/.cargo/git
             ~/.gradle/caches
@@ -34,6 +35,12 @@ jobs:
           key: ${{ runner.os }}-deps-v2-${{ hashFiles('**/Cargo.lock', '**/*.gradle.kts', 'gradle/wrapper/gradle-wrapper.properties') }}
           restore-keys: |
             ${{ runner.os }}-deps-v2-
+
+      - name: Install cargo-ndk
+        run: |
+          if ! command -v cargo-ndk &> /dev/null; then
+            cargo install cargo-ndk
+          fi
 
       - name: Grant execute permission for gradlew
         run: chmod +x ./gradlew
