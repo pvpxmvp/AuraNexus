@@ -17,7 +17,7 @@ class AuraNative(
     val rank: Int
 ) : AutoCloseable {
 
-    private var nativePtr: Long = 0
+    var nativePtr: Long = 0
 
     init {
         try {
@@ -79,4 +79,12 @@ class AuraNative(
     private external fun trainStep(ptr: Long, data: FloatArray): Int
     private external fun exportModel(ptr: Long, path: String)
     private external fun destroy(ptr: Long)
+
+    companion object {
+        @JvmStatic
+        external fun getWeights(ptr: Long): FloatArray
+
+        @JvmStatic
+        external fun getMeta(ptr: Long): IntArray
+    }
 }

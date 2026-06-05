@@ -39,6 +39,22 @@ import android.content.Intent
 import android.net.Uri
 import androidx.documentfile.provider.DocumentFile
 
+fun IntArray.toByteArray(): ByteArray {
+    val b = java.nio.ByteBuffer.allocate(this.size * 4).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+    for (v in this) {
+        b.putInt(v)
+    }
+    return b.array()
+}
+
+fun FloatArray.toByteArray(): ByteArray {
+    val b = java.nio.ByteBuffer.allocate(this.size * 4).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+    for (v in this) {
+        b.putFloat(v)
+    }
+    return b.array()
+}
+
 class MainActivity : ComponentActivity() {
 
     private var aura: AuraNative? = null
@@ -1058,18 +1074,31 @@ class MainActivity : ComponentActivity() {
                                                         fileDoc = docTree.createFile("application/octet-stream", fileName)
                                                         if (fileDoc != null) {
                                                             context.contentResolver.openOutputStream(fileDoc.uri)?.use { stream ->
-                                                                val modelHeaders = ("AuraNexus Low-Rank Tensor-Train Model Weights\n" +
-                                                                        "Format: $finalFormat\n" +
-                                                                        "InputDim: $finalInputDim\n" +
-                                                                        "Layers: $finalLayers\n" +
-                                                                        "Rank: $finalRank\n" +
-                                                                        "Goodness Metric: $goodnessVal\n" +
-                                                                        "Thermal Mode: $thermalLimitMode\n" +
-                                                                        "Learning Rate: $learningRate\n").toByteArray(Charsets.UTF_8)
-                                                                val simulatedWeights = ByteArray(1024) { i -> (i * 7 + finalRank + finalLayers).toByte() }
-                                                                stream.write(modelHeaders)
-                                                                stream.write(simulatedWeights)
-                                                                sizeBytes = modelHeaders.size.toLong() + simulatedWeights.size.toLong()
+                                                                val activePtr = aura?.nativePtr ?: 0L
+                                                                if (activePtr == 0L) {
+                                                                    throw Exception("Native Core context pointer is null during export")
+                                                                }
+                                                                val weights = AuraNative.getWeights(activePtr)
+                                                                val meta = AuraNative.getMeta(activePtr)
+
+                                                                val header = byteArrayOf('A'.toByte(), 'U'.toByte(), 'R'.toByte(), 'A'.toByte())
+                                                                val metaBytes = meta.toByteArray()
+                                                                val weightsBytes = weights.toByteArray()
+
+                                                                val crc = java.util.zip.CRC32()
+                                                                crc.update(header)
+                                                                crc.update(metaBytes)
+                                                                crc.update(weightsBytes)
+                                                                val crcValue = crc.value
+
+                                                                val footer = java.nio.ByteBuffer.allocate(4).order(java.nio.ByteOrder.LITTLE_ENDIAN).putInt(crcValue.toInt()).array()
+
+                                                                stream.write(header)
+                                                                stream.write(metaBytes)
+                                                                stream.write(weightsBytes)
+                                                                stream.write(footer)
+
+                                                                sizeBytes = header.size.toLong() + metaBytes.size.toLong() + weightsBytes.size.toLong() + footer.size.toLong()
                                                             }
                                                             savedLocationPath = selectedFolderPathName ?: "Selected SAF Folder"
                                                         } else {
@@ -1082,16 +1111,31 @@ class MainActivity : ComponentActivity() {
                                                     // Default fallback to app internal file sandbox directory if SAF is not chosen
                                                     val fallbackFile = java.io.File(context.filesDir, fileName)
                                                     fallbackFile.outputStream().use { stream ->
-                                                        val modelHeaders = ("AuraNexus Low-Rank Tensor-Train Model Weights (Fallback Sandbox)\n" +
-                                                                "Format: $finalFormat\n" +
-                                                                "InputDim: $finalInputDim\n" +
-                                                                "Layers: $finalLayers\n" +
-                                                                "Rank: $finalRank\n" +
-                                                                "Goodness Metric: $goodnessVal\n").toByteArray(Charsets.UTF_8)
-                                                        val simulatedWeights = ByteArray(1024) { i -> (i * 7 + finalRank + finalLayers).toByte() }
-                                                        stream.write(modelHeaders)
-                                                        stream.write(simulatedWeights)
-                                                        sizeBytes = modelHeaders.size.toLong() + simulatedWeights.size.toLong()
+                                                        val activePtr = aura?.nativePtr ?: 0L
+                                                        if (activePtr == 0L) {
+                                                            throw Exception("Native Core context pointer is null during export")
+                                                        }
+                                                        val weights = AuraNative.getWeights(activePtr)
+                                                        val meta = AuraNative.getMeta(activePtr)
+
+                                                        val header = byteArrayOf('A'.toByte(), 'U'.toByte(), 'R'.toByte(), 'A'.toByte())
+                                                        val metaBytes = meta.toByteArray()
+                                                        val weightsBytes = weights.toByteArray()
+
+                                                        val crc = java.util.zip.CRC32()
+                                                        crc.update(header)
+                                                        crc.update(metaBytes)
+                                                        crc.update(weightsBytes)
+                                                        val crcValue = crc.value
+
+                                                        val footer = java.nio.ByteBuffer.allocate(4).order(java.nio.ByteOrder.LITTLE_ENDIAN).putInt(crcValue.toInt()).array()
+
+                                                        stream.write(header)
+                                                        stream.write(metaBytes)
+                                                        stream.write(weightsBytes)
+                                                        stream.write(footer)
+
+                                                        sizeBytes = header.size.toLong() + metaBytes.size.toLong() + weightsBytes.size.toLong() + footer.size.toLong()
                                                     }
                                                     savedLocationPath = fallbackFile.absolutePath
                                                 }

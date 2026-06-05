@@ -284,6 +284,7 @@ pub struct CacheAlignedWeights {
     pub d: usize,
     pub r_curr: usize,
     pub data: *mut f32,
+    pub phase_data: *mut f32,
 }
 
 impl CacheAlignedWeights {
@@ -299,6 +300,20 @@ impl CacheAlignedWeights {
     pub fn set(&self, a: usize, j: usize, b: usize, val: f32) {
         let idx = a * (self.r_curr * self.d) + b * self.d + j;
         unsafe { *self.data.add(idx) = val; }
+    }
+
+    /// Read weight phase angle.
+    #[inline(always)]
+    pub fn get_phase(&self, a: usize, j: usize, b: usize) -> f32 {
+        let idx = a * (self.r_curr * self.d) + b * self.d + j;
+        unsafe { *self.phase_data.add(idx) }
+    }
+
+    /// Write weight phase angle.
+    #[inline(always)]
+    pub fn set_phase(&self, a: usize, j: usize, b: usize, val: f32) {
+        let idx = a * (self.r_curr * self.d) + b * self.d + j;
+        unsafe { *self.phase_data.add(idx) = val; }
     }
 
     pub fn len(&self) -> usize {
@@ -367,7 +382,16 @@ pub struct AuraCore {
     /// Preallocated state buffers inside the arena (addresses)
     pub pos_states_ptrs: Vec<*mut f32>,
     pub neg_states_ptrs: Vec<*mut f32>,
+    
+    /// Preallocated phase angle buffers (representing complex states)
+    pub pos_phases_ptrs: Vec<*mut f32>,
+    pub neg_phases_ptrs: Vec<*mut f32>,
+    
     pub state_sizes: Vec<usize>,
+
+    /// Global entangled quantum phases representing shared latent phase space
+    pub global_quantum_phases: *mut f32,
+    pub quantum_phases_len: usize,
 
     /// Stagnation tracking for deterministic expansion
     pub stagnation_counter: u32,
@@ -430,7 +454,8 @@ impl AuraCore {
     pub fn new(input_dim: usize, num_layers: usize, rank: usize) -> Self {
         assert!(num_layers > 0, "Number of layers must be greater than zero");
         
-        let mut arena = CacheAlignedArena::new(50); // 50MB static allocation
+        // Boost the static allocation size slightly to accommodate additional phase parameters under low footprint
+        let mut arena = CacheAlignedArena::new(60); 
         let mut rng = rand::thread_rng();
         
         let chunk_base = input_dim / num_layers;
@@ -441,6 +466,14 @@ impl AuraCore {
             ranks[i] = rank;
         }
 
+        let quantum_phases_len = 32;
+        let global_quantum_phases = arena.allocate_aligned(quantum_phases_len * 4, 64);
+        unsafe {
+            for i in 0..quantum_phases_len {
+                *global_quantum_phases.add(i) = rng.gen_range(-3.14159..3.14159);
+            }
+        }
+
         let mut cores = Vec::with_capacity(num_layers);
         for k in 0..num_layers {
             let d_k = chunk_base + if k < remainder { 1 } else { 0 };
@@ -449,21 +482,27 @@ impl AuraCore {
             
             let total_weights = r_prev_val * d_k * r_curr_val;
             
-            // Align weights to 128 bytes
+            // Align weights magnitude to 128 bytes
             let ptr = arena.allocate_aligned(total_weights * 4, 128);
+            
+            // Align weights phase angle to 128 bytes
+            let phase_ptr = arena.allocate_aligned(total_weights * 4, 128);
             
             let weights = CacheAlignedWeights {
                 r_prev: r_prev_val,
                 d: d_k,
                 r_curr: r_curr_val,
                 data: ptr,
+                phase_data: phase_ptr,
             };
             
-            // Xavier formula for initializing
+            // Xavier formula for initializing magnitude
             let limit = (6.0 / (r_prev_val + r_curr_val + d_k) as f32).sqrt();
             for i in 0..total_weights {
                 unsafe {
                     *weights.data.add(i) = rng.gen_range(-limit..limit);
+                    // Initialize complex phase randomly within standard radian limits
+                    *weights.phase_data.add(i) = rng.gen_range(-3.14159..3.14159);
                 }
             }
             
@@ -482,7 +521,11 @@ impl AuraCore {
             threshold: 2.0,
             pos_states_ptrs: Vec::new(),
             neg_states_ptrs: Vec::new(),
+            pos_phases_ptrs: Vec::new(),
+            neg_phases_ptrs: Vec::new(),
             state_sizes: Vec::new(),
+            global_quantum_phases,
+            quantum_phases_len,
             stagnation_counter: 0,
             previous_pos_goodness: 0.0,
             input_history: std::sync::Mutex::new(Vec::with_capacity(64)),
@@ -492,7 +535,7 @@ impl AuraCore {
         core_instance
     }
 
-    /// Allocates internal states buffers within the Arena sequentially.
+    /// Allocates internal states and phase buffers within the Arena sequentially.
     pub fn allocate_buffers(&mut self) {
         let num_layers = self.cores.len();
         self.state_sizes = vec![1; num_layers + 1];
@@ -502,6 +545,8 @@ impl AuraCore {
         
         self.pos_states_ptrs = Vec::with_capacity(num_layers + 1);
         self.neg_states_ptrs = Vec::with_capacity(num_layers + 1);
+        self.pos_phases_ptrs = Vec::with_capacity(num_layers + 1);
+        self.neg_phases_ptrs = Vec::with_capacity(num_layers + 1);
         
         for k in 0..=num_layers {
             let size = self.state_sizes[k];
@@ -509,13 +554,20 @@ impl AuraCore {
             let pos_ptr = self.arena.allocate_aligned(size * 4, 64);
             let neg_ptr = self.arena.allocate_aligned(size * 4, 64);
             
+            let pos_phase_ptr = self.arena.allocate_aligned(size * 4, 64);
+            let neg_phase_ptr = self.arena.allocate_aligned(size * 4, 64);
+            
             unsafe {
                 std::ptr::write_bytes(pos_ptr, 0, size);
                 std::ptr::write_bytes(neg_ptr, 0, size);
+                std::ptr::write_bytes(pos_phase_ptr, 0, size);
+                std::ptr::write_bytes(neg_phase_ptr, 0, size);
             }
             
             self.pos_states_ptrs.push(pos_ptr);
             self.neg_states_ptrs.push(neg_ptr);
+            self.pos_phases_ptrs.push(pos_phase_ptr);
+            self.neg_phases_ptrs.push(neg_phase_ptr);
         }
     }
 
@@ -575,6 +627,7 @@ impl AuraCore {
     pub fn forward(&self, input: &[f32], is_image: bool, width: usize, height: usize) -> f32 {
         let processed_input = self.process_input(input, is_image, width, height);
         let mut current_state = vec![1.0; 1];
+        let mut current_phase = vec![0.0; 1];
         let mut goodness = 0.0;
         let mut start_idx = 0;
         
@@ -585,15 +638,51 @@ impl AuraCore {
             start_idx += core.d;
             
             let mut next_state = vec![0.0; core.r_curr];
+            let mut next_phase = vec![0.0; core.r_curr];
             
             for b in 0..core.r_curr {
-                let mut cell_sum = 0.0;
-                for a in 0..core.r_prev {
-                    let offset = a * (core.r_curr * core.d) + b * core.d;
-                    let weight_sum = neon_gemv_element(unsafe { core.weights.data.add(offset) }, x_k, core.d);
-                    cell_sum += current_state[a] * weight_sum;
+                let mut best_magnitude = 0.0;
+                let mut best_real = 0.0;
+                let mut best_imag = 0.0;
+                
+                let concept_shifts = [0.0, 1.57079, 3.14159]; // Superposition of 3 concept phases
+                
+                for &shift in &concept_shifts {
+                    let mut sum_real = 0.0;
+                    let mut sum_imag = 0.0;
+                    
+                    for a in 0..core.r_prev {
+                        let offset = a * (core.r_curr * core.d) + b * core.d;
+                        let prev_val = current_state[a];
+                        let prev_phase = current_phase[a];
+                        
+                        let entanglement_idx = (k * core.r_curr + b) % self.quantum_phases_len;
+                        let global_e_phase = unsafe { *self.global_quantum_phases.add(entanglement_idx) };
+                        
+                        for j in 0..core.d {
+                            if j < x_k.len() {
+                                let w_mag = unsafe { *core.weights.data.add(offset + j) };
+                                let w_phase = unsafe { *core.weights.phase_data.add(offset + j) };
+                                
+                                let total_angle = prev_phase + w_phase + global_e_phase + shift;
+                                let flow_x = x_k[j];
+                                
+                                sum_real += prev_val * w_mag * flow_x * total_angle.cos();
+                                sum_imag += prev_val * w_mag * flow_x * total_angle.sin();
+                            }
+                        }
+                    }
+                    
+                    let mag = (sum_real * sum_real + sum_imag * sum_imag).sqrt();
+                    if mag >= best_magnitude {
+                        best_magnitude = mag;
+                        best_real = sum_real;
+                        best_imag = sum_imag;
+                    }
                 }
-                next_state[b] = cell_sum;
+                
+                next_state[b] = best_magnitude;
+                next_phase[b] = best_imag.atan2(best_real + 1e-9);
             }
             
             let norm_sq: f32 = next_state.iter().map(|&v| v * v).sum();
@@ -605,6 +694,7 @@ impl AuraCore {
             }
             
             current_state = next_state;
+            current_phase = next_phase;
         }
         
         goodness
@@ -612,9 +702,10 @@ impl AuraCore {
 
     /// In-place forward pass writing directly into Cache Aligned Arena memory slots. Zero heap allocations.
     /// Used directly on already processed/normalized vectors to avoid double normalisation.
-    pub fn forward_in_place_raw(&self, input: &[f32], states_ptrs: &[*mut f32]) -> f32 {
+    pub fn forward_in_place_raw(&self, input: &[f32], states_ptrs: &[*mut f32], phases_ptrs: &[*mut f32]) -> f32 {
         unsafe {
             *states_ptrs[0] = 1.0;
+            *phases_ptrs[0] = 0.0;
         }
         
         let mut goodness = 0.0;
@@ -628,19 +719,54 @@ impl AuraCore {
             start_idx += core.d;
             
             let prev_state_ptr = states_ptrs[k];
+            let prev_phase_ptr = phases_ptrs[k];
             let next_state_ptr = states_ptrs[k+1];
+            let next_phase_ptr = phases_ptrs[k+1];
             
             for b in 0..core.r_curr {
-                let mut cell_sum = 0.0;
-                for a in 0..core.r_prev {
-                    let offset = a * (core.r_curr * core.d) + b * core.d;
-                    let weight_sum = neon_gemv_element(unsafe { core.weights.data.add(offset) }, x_k, core.d);
+                let mut best_magnitude = 0.0;
+                let mut best_real = 0.0;
+                let mut best_imag = 0.0;
+                
+                let concept_shifts = [0.0, 1.57079, 3.14159]; // superposition of 3 candidate phases
+                
+                for &shift in &concept_shifts {
+                    let mut sum_real = 0.0;
+                    let mut sum_imag = 0.0;
                     
-                    let prev_val = unsafe { *prev_state_ptr.add(a) };
-                    cell_sum += prev_val * weight_sum;
+                    for a in 0..core.r_prev {
+                        let offset = a * (core.r_curr * core.d) + b * core.d;
+                        let prev_val = unsafe { *prev_state_ptr.add(a) };
+                        let prev_phase = unsafe { *prev_phase_ptr.add(a) };
+                        
+                        let entanglement_idx = (k * core.r_curr + b) % self.quantum_phases_len;
+                        let global_e_phase = unsafe { *self.global_quantum_phases.add(entanglement_idx) };
+                        
+                        for j in 0..core.d {
+                            if j < x_k.len() {
+                                let w_mag = unsafe { *core.weights.data.add(offset + j) };
+                                let w_phase = unsafe { *core.weights.phase_data.add(offset + j) };
+                                
+                                let total_angle = prev_phase + w_phase + global_e_phase + shift;
+                                let flow_x = x_k[j];
+                                
+                                sum_real += prev_val * w_mag * flow_x * total_angle.cos();
+                                sum_imag += prev_val * w_mag * flow_x * total_angle.sin();
+                            }
+                        }
+                    }
+                    
+                    let mag = (sum_real * sum_real + sum_imag * sum_imag).sqrt();
+                    if mag >= best_magnitude {
+                        best_magnitude = mag;
+                        best_real = sum_real;
+                        best_imag = sum_imag;
+                    }
                 }
+                
                 unsafe {
-                    *next_state_ptr.add(b) = cell_sum;
+                    *next_state_ptr.add(b) = best_magnitude;
+                    *next_phase_ptr.add(b) = best_imag.atan2(best_real + 1e-9);
                 }
             }
             
@@ -663,9 +789,9 @@ impl AuraCore {
     }
 
     /// In-place forward pass with input processing and inline normalization.
-    pub fn forward_in_place(&self, input: &[f32], is_image: bool, width: usize, height: usize, states_ptrs: &[*mut f32]) -> f32 {
+    pub fn forward_in_place(&self, input: &[f32], is_image: bool, width: usize, height: usize, states_ptrs: &[*mut f32], phases_ptrs: &[*mut f32]) -> f32 {
         let processed = self.process_input(input, is_image, width, height);
-        self.forward_in_place_raw(&processed, states_ptrs)
+        self.forward_in_place_raw(&processed, states_ptrs, phases_ptrs)
     }
 
     /// Single local train step executing on CacheAlignedArena structures. Clamps weights to [-1, 1].
@@ -673,8 +799,8 @@ impl AuraCore {
         let processed_pos = self.process_input(positive_data, is_image, width, height);
         let processed_neg = self.process_input(negative_data, is_image, width, height);
 
-        let pos_goodness = self.forward_in_place_raw(&processed_pos, &self.pos_states_ptrs);
-        let neg_goodness = self.forward_in_place_raw(&processed_neg, &self.neg_states_ptrs);
+        let pos_goodness = self.forward_in_place_raw(&processed_pos, &self.pos_states_ptrs, &self.pos_phases_ptrs);
+        let neg_goodness = self.forward_in_place_raw(&processed_neg, &self.neg_states_ptrs, &self.neg_phases_ptrs);
         
         let pos_deficit = (self.threshold - pos_goodness).max(0.0);
         let neg_surplus = (neg_goodness - self.threshold).max(0.0);
@@ -696,42 +822,58 @@ impl AuraCore {
             let pos_prev_ptr = self.pos_states_ptrs[k];
             let pos_curr_ptr = self.pos_states_ptrs[k+1];
             
+            let pos_prev_phase_ptr = self.pos_phases_ptrs[k];
+            
             let neg_prev_ptr = self.neg_states_ptrs[k];
             let neg_curr_ptr = self.neg_states_ptrs[k+1];
             
+            let neg_prev_phase_ptr = self.neg_phases_ptrs[k];
+            
             for a in 0..core.r_prev {
                 let pos_prev_val = unsafe { *pos_prev_ptr.add(a) };
+                let pos_prev_phase = unsafe { *pos_prev_phase_ptr.add(a) };
+                
                 let neg_prev_val = unsafe { *neg_prev_ptr.add(a) };
+                let neg_prev_phase = unsafe { *neg_prev_phase_ptr.add(a) };
                 
                 for b in 0..core.r_curr {
                     let pos_curr_val = unsafe { *pos_curr_ptr.add(b) };
                     let neg_curr_val = unsafe { *neg_curr_ptr.add(b) };
                     
                     let offset = a * (core.r_curr * core.d) + b * core.d;
+                    let entanglement_idx = (k * core.r_curr + b) % self.quantum_phases_len;
+                    let global_e_phase = unsafe { *self.global_quantum_phases.add(entanglement_idx) };
                     
                     for j in 0..core.d {
-                        let mut delta = 0.0;
+                        let mut delta_mag = 0.0;
+                        let mut delta_phase = 0.0;
+                        
+                        let current_phase = unsafe { *core.weights.phase_data.add(offset + j) };
                         
                         if pos_deficit > 0.0 && j < pos_x_k.len() {
-                            delta += self.learning_rate 
-                                * pos_deficit 
-                                * 2.0 
-                                * pos_curr_val
-                                * pos_prev_val 
-                                * pos_x_k[j];
+                            let factor = self.learning_rate * pos_deficit * 2.0 * pos_curr_val * pos_prev_val * pos_x_k[j];
+                            delta_mag += factor;
+                            
+                            // Adjust weight phase for positive reinforcement (constructive alignment)
+                            let diff_angle = pos_prev_phase + current_phase + global_e_phase;
+                            delta_phase -= factor * 0.1 * diff_angle.sin();
                         }
                         
                         if neg_surplus > 0.0 && j < neg_x_k.len() {
-                            delta -= self.learning_rate 
-                                * neg_surplus 
-                                * 2.0 
-                                * neg_curr_val
-                                * neg_prev_val
-                                * neg_x_k[j];
+                            let factor = self.learning_rate * neg_surplus * 2.0 * neg_curr_val * neg_prev_val * neg_x_k[j];
+                            delta_mag -= factor;
+                            
+                            // Adjust weight phase for negative reinforcement (destructive alignment)
+                            let diff_angle = neg_prev_phase + current_phase + global_e_phase;
+                            delta_phase += factor * 0.1 * diff_angle.sin();
                         }
                         
                         unsafe {
-                            *core.weights.data.add(offset + j) += delta;
+                            *core.weights.data.add(offset + j) += delta_mag;
+                            
+                            // Wrap weight phase angle safely to standard radians [-PI, PI]
+                            let next_phase = current_phase + delta_phase;
+                            *core.weights.phase_data.add(offset + j) = next_phase.sin().atan2(next_phase.cos());
                         }
                     }
                 }
@@ -746,6 +888,16 @@ impl AuraCore {
                     let val = *core.weights.data.add(i);
                     *core.weights.data.add(i) = val.clamp(-1.0, 1.0);
                 }
+            }
+        }
+
+        // Self-optimize non-local global quantum entangled phases phase-locked space
+        unsafe {
+            for idx in 0..self.quantum_phases_len {
+                let diff = self.learning_rate * 0.05 * (pos_deficit - neg_surplus);
+                let current_val = *self.global_quantum_phases.add(idx);
+                let next_val = current_val + diff;
+                *self.global_quantum_phases.add(idx) = next_val.sin().atan2(next_val.cos());
             }
         }
 
@@ -790,22 +942,35 @@ impl AuraCore {
             new_ranks[k] = self.cores[k-1].r_curr + 1;
         }
 
-        // 1. Back up existing weights temporarily
+        // 1. Back up existing weights and phases temporarily
         let mut saved_weights = Vec::with_capacity(num_layers);
+        let mut saved_phases = Vec::with_capacity(num_layers);
         for k in 0..num_layers {
             let core = &self.cores[k];
             let total_el = core.r_prev * core.d * core.r_curr;
             let mut w_vec = vec![0.0; total_el];
+            let mut p_vec = vec![0.0; total_el];
             unsafe {
                 std::ptr::copy_nonoverlapping(core.weights.data, w_vec.as_mut_ptr(), total_el);
+                std::ptr::copy_nonoverlapping(core.weights.phase_data, p_vec.as_mut_ptr(), total_el);
             }
             saved_weights.push(w_vec);
+            saved_phases.push(p_vec);
         }
 
         // 2. Clear out the alignment offset back to index 0
         self.arena.reset();
 
-        // 3. Sequential reallocation inside the Cache-Aligned Arena
+        // 3. Reallocate global entangled quantum phases
+        let mut rng = rand::thread_rng();
+        self.global_quantum_phases = self.arena.allocate_aligned(self.quantum_phases_len * 4, 64);
+        unsafe {
+            for i in 0..self.quantum_phases_len {
+                *self.global_quantum_phases.add(i) = rng.gen_range(-3.14159..3.14159);
+            }
+        }
+
+        // 4. Sequential reallocation inside the Cache-Aligned Arena
         let mut new_cores = Vec::with_capacity(num_layers);
         for k in 0..num_layers {
             let old_core = &self.cores[k];
@@ -814,9 +979,11 @@ impl AuraCore {
             
             let total_weights_new = r_prev_new * old_core.d * r_curr_new;
             let ptr = self.arena.allocate_aligned(total_weights_new * 4, 128);
+            let phase_ptr = self.arena.allocate_aligned(total_weights_new * 4, 128);
             
             unsafe {
                 std::ptr::write_bytes(ptr, 0, total_weights_new);
+                std::ptr::write_bytes(phase_ptr, 0, total_weights_new);
             }
             
             let new_weights = CacheAlignedWeights {
@@ -824,16 +991,20 @@ impl AuraCore {
                 d: old_core.d,
                 r_curr: r_curr_new,
                 data: ptr,
+                phase_data: phase_ptr,
             };
 
-            // Copy old weights into the fresh expanded layout block
+            // Copy old weights and phases into the fresh expanded layout block
             let old_weights_vec = &saved_weights[k];
+            let old_phases_vec = &saved_phases[k];
             for a in 0..old_core.r_prev {
                 for b in 0..old_core.r_curr {
                     for j in 0..old_core.d {
                         let old_idx = a * (old_core.r_curr * old_core.d) + b * old_core.d + j;
                         let old_val = old_weights_vec[old_idx];
+                        let old_phase = old_phases_vec[old_idx];
                         new_weights.set(a, j, b, old_val);
+                        new_weights.set_phase(a, j, b, old_phase);
                     }
                 }
             }
@@ -848,7 +1019,7 @@ impl AuraCore {
 
         self.cores = new_cores;
 
-        // 4. Rebuild the sequential tracking states inside Cache Aligned Arena slots
+        // 5. Rebuild the sequential tracking states inside Cache Aligned Arena slots
         self.allocate_buffers();
     }
 }
@@ -1116,10 +1287,102 @@ pub extern "C" fn export_weights_core(ptr: *mut AuraCore, path: *const std::os::
 }
 
 #[no_mangle]
+pub extern "C" fn get_weights_size(ptr: *mut AuraCore) -> i32 {
+    if ptr.is_null() {
+        return 0;
+    }
+    let core = unsafe { &*ptr };
+    let mut total_size = 0;
+    for tensor_core in &core.cores {
+        total_size += tensor_core.r_prev * tensor_core.d * tensor_core.r_curr;
+    }
+    total_size as i32
+}
+
+#[no_mangle]
+pub extern "C" fn get_weights_data(ptr: *mut AuraCore, out_buf: *mut f32, max_len: i32) -> i32 {
+    if ptr.is_null() || out_buf.is_null() {
+        return 0;
+    }
+    let core = unsafe { &*ptr };
+    let mut offset = 0;
+    for tensor_core in &core.cores {
+        let len = tensor_core.r_prev * tensor_core.d * tensor_core.r_curr;
+        if offset + len > max_len as usize {
+            break;
+        }
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                tensor_core.weights.data,
+                out_buf.add(offset),
+                len,
+            );
+        }
+        offset += len;
+    }
+    offset as i32
+}
+
+#[no_mangle]
+pub extern "C" fn get_meta_data(ptr: *mut AuraCore, out_buf: *mut i32) {
+    if ptr.is_null() || out_buf.is_null() {
+        return;
+    }
+    let core = unsafe { &*ptr };
+    let layers = core.cores.len() as i32;
+    let mut input_dim = 0;
+    let mut max_rank = 0;
+    for tensor_core in &core.cores {
+        input_dim += tensor_core.d as i32;
+        if tensor_core.r_curr as i32 > max_rank {
+            max_rank = tensor_core.r_curr as i32;
+        }
+    }
+    unsafe {
+        *out_buf.add(0) = input_dim;
+        *out_buf.add(1) = layers;
+        *out_buf.add(2) = max_rank;
+        *out_buf.add(3) = 1; // Version
+        *out_buf.add(4) = 0; // Reserved
+    }
+}
+
+#[no_mangle]
 pub extern "C" fn destroy_core(ptr: *mut AuraCore) {
     if !ptr.is_null() {
         unsafe {
             let _b = Box::from_raw(ptr);
         }
     }
+}
+
+#[no_mangle]
+pub extern "C" fn rust_numeric_encoder(raw_floats: *const f32, length: i32, out_buf: *mut f32, out_dim: i32) -> i32 {
+    if raw_floats.is_null() || out_buf.is_null() || length <= 0 || out_dim <= 0 {
+        return 0;
+    }
+    let data = unsafe { std::slice::from_raw_parts(raw_floats, length as usize) };
+    let out = unsafe { std::slice::from_raw_parts_mut(out_buf, out_dim as usize) };
+    
+    let mut sum = 0.0;
+    for &x in data { sum += x; }
+    let mean = sum / length as f32;
+    
+    let mut var_sum = 0.0;
+    for &x in data {
+        let diff = x - mean;
+        var_sum += diff * diff;
+    }
+    let std_dev = (var_sum / length as f32 + 1e-6).sqrt();
+    
+    for i in 0..(out_dim as usize) {
+        let idx_ratio = (i as f32) / (out_dim as f32);
+        let sample_idx = ((idx_ratio * length as f32) as usize).min(length as usize - 1);
+        
+        let normalized_val = (data[sample_idx] - mean) / std_dev;
+        let harmonic = ((i + 1) as f32 * 3.14159 * idx_ratio).sin();
+        out[i] = normalized_val * 0.7 + harmonic * 0.3;
+    }
+    
+    out_dim
 }

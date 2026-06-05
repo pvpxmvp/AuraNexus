@@ -15,6 +15,9 @@ extern "C" {
     CorePtr init_core(int input_dim, int layers, int rank);
     int train_step_core(CorePtr ptr, const float* data, int length);
     void export_weights_core(CorePtr ptr, const char* path);
+    int get_weights_size(CorePtr ptr);
+    int get_weights_data(CorePtr ptr, float* out_buf, int max_len);
+    void get_meta_data(CorePtr ptr, int* out_buf);
     void destroy_core(CorePtr ptr);
 }
 
@@ -152,6 +155,65 @@ Java_com_auranexus_core_AuraNative_exportModel(JNIEnv *env, jobject thiz, jlong 
     }
 
     env->ReleaseStringUTFChars(path, utf_path);
+}
+
+extern "C" JNIEXPORT jfloatArray JNICALL
+Java_com_auranexus_core_AuraNative_getWeights(JNIEnv *env, jobject thiz, jlong ptr) {
+    if (ptr == 0) {
+        LOGE("getWeights Error: Core context pointer is null.");
+        return nullptr;
+    }
+    CorePtr core = reinterpret_cast<CorePtr>(ptr);
+    int size = get_weights_size(core);
+    if (size <= 0) {
+        LOGE("getWeights Error: Weights size is zero or invalid.");
+        return nullptr;
+    }
+    
+    jfloatArray result = env->NewFloatArray(size);
+    if (result == nullptr) {
+        LOGE("getWeights Error: Failed to allocate float array.");
+        return nullptr;
+    }
+    
+    jfloat* body = env->GetFloatArrayElements(result, nullptr);
+    if (body == nullptr) {
+        LOGE("getWeights Error: Failed to get float array elements.");
+        return nullptr;
+    }
+    
+    int written = get_weights_data(core, body, size);
+    env->ReleaseFloatArrayElements(result, body, 0);
+    
+    if (written != size) {
+        LOGE("getWeights Warning: Weights written count (%d) mismatches size (%d).", written, size);
+    }
+    return result;
+}
+
+extern "C" JNIEXPORT jintArray JNICALL
+Java_com_auranexus_core_AuraNative_getMeta(JNIEnv *env, jobject thiz, jlong ptr) {
+    if (ptr == 0) {
+        LOGE("getMeta Error: Core context pointer is null.");
+        return nullptr;
+    }
+    CorePtr core = reinterpret_cast<CorePtr>(ptr);
+    
+    jintArray result = env->NewIntArray(5);
+    if (result == nullptr) {
+        LOGE("getMeta Error: Failed to allocate int array.");
+        return nullptr;
+    }
+    
+    jint* body = env->GetIntArrayElements(result, nullptr);
+    if (body == nullptr) {
+        LOGE("getMeta Error: Failed to get int array elements.");
+        return nullptr;
+    }
+    
+    get_meta_data(core, body);
+    env->ReleaseIntArrayElements(result, body, 0);
+    return result;
 }
 
 extern "C" JNIEXPORT void JNICALL
