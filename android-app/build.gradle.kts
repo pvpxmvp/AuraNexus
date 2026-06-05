@@ -1,5 +1,5 @@
 plugins {
-    id("com.android.library")
+    id("com.android.application")
     id("org.jetbrains.kotlin.android")
 }
 
@@ -8,6 +8,7 @@ android {
     compileSdk = 34
 
     defaultConfig {
+        applicationId = "com.auranexus.core"
         minSdk = 24
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"

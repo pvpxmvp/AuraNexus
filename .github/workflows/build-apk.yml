@@ -48,12 +48,28 @@ jobs:
       - name: Build Debug APK
         run: ./gradlew :android-app:assembleDebug
 
-      - name: Find APK file
+      - name: Debug Build Outputs
         run: |
-          echo "Searching for APK..."
-          find android-app/build -name "*.apk" -type f
-          # Сохраняем путь в переменную окружения для следующего шага
-          APK_PATH=$(find android-app/build -name "*.apk" -type f | head -n 1)
+          echo "=== Listing android-app directory ==="
+          ls -R android-app/ || true
+          
+          echo "=== Checking build outputs ==="
+          if [ -d "android-app/build/outputs" ]; then
+            find android-app/build/outputs -type f
+          else
+            echo "ERROR: android-app/build/outputs directory does not exist!"
+            echo "Available directories in android-app/build:"
+            ls android-app/build/ || true
+          fi
+
+      - name: Find APK anywhere
+        run: |
+          APK_PATH=$(find . -name "*.apk" -type f 2>/dev/null | head -n 1)
+          if [ -z "$APK_PATH" ]; then
+            echo "::error::No APK file found anywhere in the repository!"
+            exit 1
+          fi
+          echo "Found APK at: $APK_PATH"
           echo "APK_PATH=$APK_PATH" >> $GITHUB_ENV
 
       - name: Upload Artifact
