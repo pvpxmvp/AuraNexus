@@ -58,6 +58,9 @@ android {
             if (name.startsWith("buildCMake") || name.startsWith("configureCMake") || name.startsWith("externalNativeBuild")) {
                 dependsOn("cargoNdkBuild")
             }
+            if (name.startsWith("merge") && name.endsWith("JniLibFolders")) {
+                dependsOn("cargoNdkBuild")
+            }
         }
     }
 }
