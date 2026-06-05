@@ -1,28 +1,46 @@
 name: Build AuraNexus APK
 on: [push]
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Setup Rust & Android
+      
+      - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-linux-android
-      - name: Setup Android SDK/NDK
+
+      - name: Setup Android SDK
         uses: android-actions/setup-android@v3
-        with:
-          api-level: 34
-          ndk-version: r26b
-      - name: Cache Dependencies
+
+      - name: Install Android NDK r26b
+        run: |
+          sdkmanager "ndk;26.1.10909125" --no_https
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/26.1.10909125" >> $GITHUB_ENV
+
+      - name: Cache dependencies
         uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
+            ~/.cargo/git
             ~/.gradle/caches
+            ~/.gradle/wrapper
           key: ${{ runner.os }}-deps-${{ hashFiles('**/Cargo.lock', '**/*.gradle.kts') }}
+          restore-keys: |
+            ${{ runner.os }}-deps-
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x ./gradlew
+
       - name: Build Debug APK
         run: ./gradlew :android-app:assembleDebug
+
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
