@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    width="108dp"
+    height="108dp"
+    viewportWidth="108"
+    viewportHeight="108">
+    <!-- Clean, modern nexus emblem with orthogonal lines -->
+    <path
+        android:fillColor="#4A90E2"
+        android:pathData="M54,24 L84,54 L54,84 L24,54 Z" />
+    <path
+        android:fillColor="#50E3C2"
+        android:pathData="M54,34 L74,54 L54,74 L34,54 Z" />
+    <path
+        android:fillColor="#B8E986"
+        android:pathData="M54,44 L64,54 L54,64 L44,54 Z" />
+</vector>

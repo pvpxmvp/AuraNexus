@@ -52,6 +52,12 @@ android {
         jvmTarget = "17"
     }
 
+    sourceSets {
+        named("main") {
+            jniLibs.srcDirs("src/main/jniLibs")
+        }
+    }
+
     afterEvaluate {
         // Для каждой ABI архитектуры создаем зависимость
         tasks.configureEach {
