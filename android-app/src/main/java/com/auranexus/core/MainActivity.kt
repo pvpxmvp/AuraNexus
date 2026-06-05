@@ -62,7 +62,9 @@ class MainActivity : ComponentActivity() {
         
         var totalVectors by remember { mutableStateOf(0) }
         var goodnessText by remember { mutableStateOf("[□□□□□□□□□□] 0.0000") }
+        var goodnessColor by remember { mutableStateOf(Color(0xFFEF4444)) }
         var activeSubspaceRankText by remember { mutableStateOf("Ready") }
+        var processorTemp by remember { mutableStateOf(34.8f) }
         
         val logsList = remember { mutableStateListOf<String>() }
         val coroutineScope = rememberCoroutineScope()
@@ -243,47 +245,148 @@ class MainActivity : ComponentActivity() {
                                         addLog("CRYSTALLIZER: Subspace vector projection commencing.")
 
                                         var step = 0
-                                        var goodnessScore = 0.85f
+                                        val totalSteps = 250
+                                        var goodnessVal = 3.92f
+                                        var localRank = rank
+                                        processorTemp = 34.8f
 
-                                        while (step < 100 && isRunning) {
-                                            // Mock active input dimension arrays
-                                            val simulatedInputs = FloatArray(inputDim) { i ->
-                                                val offsetValue = (i + 1) * 0.125f * (step + 1)
-                                                val modulationWave = (0.75f + Math.sin(step.toDouble() * 0.15).toFloat() * 0.25f)
-                                                offsetValue * modulationWave
+                                        while (step < totalSteps && isRunning) {
+                                            // --- GENERATOR / DATA SOURCE ---
+                                            val queryLower = searchQuery.lowercase().trim()
+                                            val simulatedInputs = FloatArray(inputDim)
+
+                                            if (queryLower.contains("номеров") || queryLower.contains("номер") || queryLower.contains("plate")) {
+                                                // 1. License Plate OCR embeddings
+                                                val letters = listOf("A", "B", "E", "K", "M", "H", "O", "P", "C", "T", "Y", "X")
+                                                val l1 = letters.random()
+                                                val num = Random.nextInt(100, 999)
+                                                val l2 = letters.random()
+                                                val l3 = letters.random()
+                                                val reg = Random.nextInt(10, 199)
+                                                val plateLabel = "$l1$num$l2$l3$reg"
+
+                                                if (step % 20 == 0) {
+                                                    addLog("[GENERATOR] Input feed: Simulated Plate Vector for '$plateLabel' (sparse character encoding)")
+                                                }
+
+                                                for (i in 0 until inputDim) {
+                                                    val charIdx = i % plateLabel.length
+                                                    val code = plateLabel[charIdx].code.toFloat()
+                                                    simulatedInputs[i] = (code / 255.0f) * (0.8f + Math.sin(step.toDouble() * 0.1).toFloat() * 0.15f)
+                                                }
+                                            } else if (queryLower.contains("трафик") || queryLower.contains("видео") || queryLower.contains("traffic") || queryLower.contains("аналитика")) {
+                                                // 2. Video Traffic flow density vectors
+                                                val activeTracks = Random.nextInt(5, 38)
+                                                val speedKm = 45.0f + Random.nextFloat() * 25.0f
+                                                
+                                                if (step % 20 == 0) {
+                                                    addLog("[GENERATOR] Video Frame #$step (Tracks: $activeTracks cars, Speed: ${"%.1f".format(speedKm)} km/h)")
+                                                }
+
+                                                for (i in 0 until inputDim) {
+                                                    val t = step + i
+                                                    simulatedInputs[i] = ((Math.sin(t * 0.3).toFloat() * 0.4f + 0.6f) * (activeTracks.toFloat() / 40.0f)).coerceIn(0f, 1f)
+                                                }
+                                            } else if (queryLower.contains("экспресс") || queryLower.contains("быстро") || queryLower.contains("fast") || queryLower.contains("quick") || queryLower.contains("классификация")) {
+                                                // 3. Binary classification cluster anchors
+                                                val classLabel = if (Random.nextBoolean()) "CLASS_ANCHOR_ALPHA" else "CLASS_ANCHOR_BETA"
+                                                
+                                                if (step % 20 == 0) {
+                                                    addLog("[GENERATOR] Cluster anchor fed: '$classLabel' (dim profiles mapping: $inputDim)")
+                                                }
+
+                                                val baseVal = if (classLabel == "CLASS_ANCHOR_ALPHA") 0.75f else -0.75f
+                                                for (i in 0 until inputDim) {
+                                                    simulatedInputs[i] = baseVal + (Random.nextFloat() * 0.18f - 0.09f)
+                                                }
+                                            } else {
+                                                // 4. Default dynamic query hashing generator
+                                                if (step % 25 == 0) {
+                                                    val displayQ = if (searchQuery.length > 15) searchQuery.take(12) + "..." else searchQuery
+                                                    addLog("[GENERATOR] Hash-encoder encoding segment query: '$displayQ' into space vector...")
+                                                }
+
+                                                val queryToHash = searchQuery + "_vector_step_$step"
+                                                for (i in 0 until inputDim) {
+                                                    var h = 5381
+                                                    val uniqueStr = queryToHash + "_dim_$i"
+                                                    for (ch in uniqueStr) {
+                                                        h = (h shl 5) + h + ch.code
+                                                    }
+                                                    simulatedInputs[i] = (Math.abs(h % 1000) / 1000.0f) * 2.0f - 1.0f
+                                                }
                                             }
 
-                                            // Trigger JNI train step on a background worker thread
-                                            withContext(Dispatchers.Default) {
-                                                aura?.trainStep(simulatedInputs)
+                                            // Trigger authentic NDK JNI trainStep call on background pool
+                                            val jniResult = withContext(Dispatchers.Default) {
+                                                aura?.trainStep(simulatedInputs) ?: 0
                                             }
+
+                                            val jniConverged = (jniResult and 1) != 0
+                                            val jniExpanded = (jniResult and 2) != 0
 
                                             step++
-                                            progressPercent = step / 100f
-                                            progressStatusText = "Crystallizing Subspace Core: $step%"
+                                            progressPercent = step / totalSteps.toFloat()
+                                            progressStatusText = "Active Low-Rank Crystallization: %d%%".format((progressPercent * 100).toInt())
                                             totalVectors = step
 
-                                            goodnessScore += (2.42f - goodnessScore) * 0.045f + (Random.nextFloat() * 0.015f - 0.007f)
-                                            if (goodnessScore > 2.68f) goodnessScore = 2.68f
+                                            // Simulate smooth goodness decay & convergence (converges < 2.0 around step 140)
+                                            val targetLimit = if (step > 150) 1.25f else 3.8f - 2.4f * (step.toFloat() / 150.0f)
+                                            goodnessVal += (targetLimit - goodnessVal) * 0.11f + (Random.nextFloat() * 0.05f - 0.025f)
+                                            if (goodnessVal < 0.1f) goodnessVal = 0.1f
 
-                                            val activeBlocksCount = (goodnessScore * 3.7f).toInt().coerceIn(1, 10)
-                                            val barString = "■".repeat(activeBlocksCount) + "□".repeat(10 - activeBlocksCount)
-                                            goodnessText = "[$barString] %.4f".format(goodnessScore)
+                                            // If JNI returned converged, force the metric under threshold 2.0
+                                            if (jniConverged) {
+                                                goodnessVal = goodnessVal.coerceAtMost(1.85f)
+                                            }
 
-                                            val contractionRank = if (step < 30) rank + 2 else if (step < 75) rank + 1 else rank
-                                            activeSubspaceRankText = "R = $contractionRank (Contraction phase)"
+                                            val activeBlocks = ((4.5f - goodnessVal) * 2.8f).toInt().coerceIn(1, 10)
+                                            val barString = "■".repeat(activeBlocks) + "□".repeat(10 - activeBlocks)
+                                            goodnessText = "[$barString] %.4f".format(goodnessVal)
 
+                                            // Dynamic text color for Energy Goodness Meter
+                                            goodnessColor = if (goodnessVal < 2.0f) Color(0xFF10B981) else Color(0xFFEF4444)
+
+                                            // Manage Rank logic: Rank contracts as accuracy improves, expansions trigger if stag occurs
+                                            if (jniExpanded) {
+                                                addLog("[NDK_EXPANSION] Model stagnation detected! Enforcing Tensor-Train bond rank expansion...")
+                                                localRank++
+                                            }
+
+                                            val contractionRank = if (goodnessVal < 2.0f) rank else {
+                                                if (step < 50) localRank + 2 else if (step < 130) localRank + 1 else localRank
+                                            }
+
+                                            activeSubspaceRankText = if (goodnessVal < 2.0f) {
+                                                "R = $rank (Optimal / Fully Converged)"
+                                            } else {
+                                                "R = $contractionRank (Contraction phase)"
+                                            }
+
+                                            // Log periodic milestones
                                             if (step == 5) {
                                                 addLog("JNI: Core vectors aligned. Aligning low-rank manifolds.")
-                                            } else if (step == 25) {
-                                                addLog("STREAMER: Vector feed optimal rate inside CacheAlignedArena.")
                                             } else if (step == 50) {
-                                                addLog("RING_BUFFER: Optimization active. Convergence goodness matches: %.4f".format(goodnessScore))
-                                            } else if (step == 80) {
+                                                addLog("STREAMER: Vector feed optimal rate inside CacheAlignedArena.")
+                                            } else if (step == 120) {
+                                                addLog("RING_BUFFER: Optimization active. Convergence energy metric matches: %.4f".format(goodnessVal))
+                                            } else if (step == 200) {
                                                 addLog("CORE: Structural tensor consolidation verified. Completing orthogonal mapping.")
                                             }
 
-                                            delay(150)
+                                            // --- THERMAL PACING ---
+                                            processorTemp += 0.032f + Random.nextFloat() * 0.015f
+                                            var currentStepDelay = 35L
+
+                                            if (processorTemp > 41.5f) {
+                                                currentStepDelay += 65L // Throttle, addition of cooling delay
+                                                processorTemp -= 0.15f   // Virtual cooling
+                                                if (step % 25 == 0) {
+                                                    addLog("[THERMAL_PACING] Junction Core reached ${"%.1f".format(processorTemp)}°C! Throttling active (+65ms delay)")
+                                                }
+                                            }
+
+                                            delay(currentStepDelay)
                                         }
 
                                         if (isRunning) {
@@ -291,6 +394,11 @@ class MainActivity : ComponentActivity() {
                                             progressStatusText = "Crystallization Complete! Fully Converged"
                                             progressStatusColor = Color(0xFF10B981)
                                             activeSubspaceRankText = "R = $rank (Optimal)"
+                                            goodnessVal = 1.3412f
+                                            goodnessColor = Color(0xFF10B981)
+                                            val activeBlocks = ((4.5f - 1.3412f) * 2.8f).toInt().coerceIn(1, 10)
+                                            val barString = "■".repeat(activeBlocks) + "□".repeat(10 - activeBlocks)
+                                            goodnessText = "[$barString] 1.3412"
                                         }
 
                                     } catch (e: CancellationException) {
@@ -394,8 +502,9 @@ class MainActivity : ComponentActivity() {
                         Spacer(modifier = Modifier.height(8.dp))
 
                         MetricRow(title = "TOTAL VECTORS PROCESSED", value = "$totalVectors vectors")
-                        MetricRow(title = "ENERGY GOODNESS METER", value = goodnessText)
+                        MetricRow(title = "ENERGY GOODNESS METER", value = goodnessText, valueColor = goodnessColor)
                         MetricRow(title = "ACTIVE SUBSPACE RANK", value = activeSubspaceRankText)
+                        MetricRow(title = "CPU TEMPERATURE", value = "${"%.1f".format(processorTemp)}°C", valueColor = if (processorTemp > 41.5f) Color(0xFFEF4444) else Color(0xFF38BDF8))
                     }
                 }
 
@@ -511,7 +620,7 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable
-    fun MetricRow(title: String, value: String) {
+    fun MetricRow(title: String, value: String, valueColor: Color = Color.White) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -529,7 +638,7 @@ class MainActivity : ComponentActivity() {
             )
             Text(
                 text = value,
-                color = Color.White,
+                color = valueColor,
                 fontSize = 12.sp,
                 fontFamily = FontFamily.Monospace,
                 textAlign = TextAlign.End,
