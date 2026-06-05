@@ -35,14 +35,53 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlin.random.Random
+import android.content.Intent
+import android.net.Uri
+import androidx.documentfile.provider.DocumentFile
 
 class MainActivity : ComponentActivity() {
 
     private var aura: AuraNative? = null
     private var trainingJob: Job? = null
 
+    private var selectedTreeUriStr by mutableStateOf<String?>(null)
+    private var selectedFolderPathName by mutableStateOf<String?>(null)
+
+    private val openDocumentTreeLauncher = registerForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
+        if (uri != null) {
+            try {
+                val takeFlags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                applicationContext.contentResolver.takePersistableUriPermission(uri, takeFlags)
+                
+                val prefs = getSharedPreferences("auranexus_prefs", MODE_PRIVATE)
+                prefs.edit().putString("saved_export_tree_uri", uri.toString()).apply()
+                
+                selectedTreeUriStr = uri.toString()
+                selectedFolderPathName = getDisplayNameForUri(uri)
+                Log.d("AuraNexus", "SAF: Folder selected successfully: $selectedTreeUriStr")
+            } catch (e: Exception) {
+                Log.e("AuraNexus", "SAF Error: Failed to persist permissions: ${e.message}")
+            }
+        }
+    }
+
+    private fun getDisplayNameForUri(uri: Uri): String {
+        return try {
+            val doc = DocumentFile.fromTreeUri(this, uri)
+            doc?.name ?: uri.path ?: "Custom Folder"
+        } catch (e: Exception) {
+            "Custom Folder"
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        
+        val prefs = getSharedPreferences("auranexus_prefs", MODE_PRIVATE)
+        selectedTreeUriStr = prefs.getString("saved_export_tree_uri", null)
+        selectedFolderPathName = selectedTreeUriStr?.let { getDisplayNameForUri(Uri.parse(it)) }
         
         setContent {
             MaterialTheme {
@@ -258,7 +297,16 @@ class MainActivity : ComponentActivity() {
         val parsedParams = remember(searchQuery) {
             parseQueryToParams(searchQuery)
         }
-        val (inputDim, layers, rank) = parsedParams
+
+        var inputDimText by remember { mutableStateOf("8") }
+        var layersTextState by remember { mutableStateOf("3") }
+        var rankTextState by remember { mutableStateOf("4") }
+
+        LaunchedEffect(parsedParams) {
+            inputDimText = parsedParams.first.toString()
+            layersTextState = parsedParams.second.toString()
+            rankTextState = parsedParams.third.toString()
+        }
 
         var isRunning by remember { mutableStateOf(false) }
         var progressPercent by remember { mutableStateOf(0f) }
@@ -274,7 +322,6 @@ class MainActivity : ComponentActivity() {
         
         // Advanced Hyperparameters & Settings Drawer
         var targetFormat by remember { mutableStateOf("tflite") }
-        var exportPath by remember { mutableStateOf("/storage/emulated/0/Download/AuraNexus") }
         var learningRate by remember { mutableStateOf(0.015f) }
         var convergenceThreshold by remember { mutableStateOf(2.0f) }
         var maxRank by remember { mutableStateOf(8) }
@@ -406,7 +453,7 @@ class MainActivity : ComponentActivity() {
                         }
 
                         Text(
-                            text = "DETERMINISTIC JNI PARAMETERS",
+                            text = "INTERACTIVE JNI PARAMETERS (EDITABLE)",
                             color = Color(0xFF6B7280),
                             fontSize = 9.sp,
                             fontWeight = FontWeight.Bold,
@@ -414,14 +461,93 @@ class MainActivity : ComponentActivity() {
                             modifier = Modifier.padding(bottom = 6.dp)
                         )
 
-                        // Badge parameters
+                        // Interactive Badge parameters
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            BadgeItem(modifier = Modifier.weight(1f), title = "INPUT DIM", value = inputDim.toString())
-                            BadgeItem(modifier = Modifier.weight(1f), title = "LAYERS", value = layers.toString())
-                            BadgeItem(modifier = Modifier.weight(1f), title = "TENSOR RANK", value = rank.toString())
+                            // OutlinedTextField for Input Dim
+                            Box(modifier = Modifier.weight(1f)) {
+                                OutlinedTextField(
+                                    value = inputDimText,
+                                    onValueChange = { newValue ->
+                                        if (!isRunning) {
+                                            inputDimText = newValue.filter { it.isDigit() }
+                                        }
+                                    },
+                                    label = { Text("INPUT DIM", fontSize = 8.5.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold) },
+                                    enabled = !isRunning,
+                                    singleLine = true,
+                                    colors = OutlinedTextFieldDefaults.colors(
+                                        focusedTextColor = Color.White,
+                                        unfocusedTextColor = Color.White,
+                                        focusedContainerColor = Color(0xFF0C111E),
+                                        unfocusedContainerColor = Color(0xFF0C111E),
+                                        focusedBorderColor = Color(0xFF22D3EE),
+                                        unfocusedBorderColor = Color(0xFF1B273F),
+                                        disabledTextColor = Color(0xFF6B7280)
+                                    ),
+                                    textStyle = androidx.compose.ui.text.TextStyle(fontSize = 15.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center),
+                                    shape = RoundedCornerShape(8.dp),
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
+
+                            // OutlinedTextField for Layers
+                            Box(modifier = Modifier.weight(1f)) {
+                                OutlinedTextField(
+                                    value = layersTextState,
+                                    onValueChange = { newValue ->
+                                        if (!isRunning) {
+                                            val digits = newValue.filter { it.isDigit() }
+                                            layersTextState = digits
+                                        }
+                                    },
+                                    label = { Text("LAYERS", fontSize = 8.5.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold) },
+                                    enabled = !isRunning,
+                                    singleLine = true,
+                                    colors = OutlinedTextFieldDefaults.colors(
+                                        focusedTextColor = Color.White,
+                                        unfocusedTextColor = Color.White,
+                                        focusedContainerColor = Color(0xFF0C111E),
+                                        unfocusedContainerColor = Color(0xFF0C111E),
+                                        focusedBorderColor = Color(0xFF22D3EE),
+                                        unfocusedBorderColor = Color(0xFF1B273F),
+                                        disabledTextColor = Color(0xFF6B7280)
+                                    ),
+                                    textStyle = androidx.compose.ui.text.TextStyle(fontSize = 15.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center),
+                                    shape = RoundedCornerShape(8.dp),
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
+
+                            // OutlinedTextField for Rank
+                            Box(modifier = Modifier.weight(1f)) {
+                                OutlinedTextField(
+                                    value = rankTextState,
+                                    onValueChange = { newValue ->
+                                        if (!isRunning) {
+                                            val digits = newValue.filter { it.isDigit() }
+                                            rankTextState = digits
+                                        }
+                                    },
+                                    label = { Text("TENSOR RANK", fontSize = 8.5.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold) },
+                                    enabled = !isRunning,
+                                    singleLine = true,
+                                    colors = OutlinedTextFieldDefaults.colors(
+                                        focusedTextColor = Color.White,
+                                        unfocusedTextColor = Color.White,
+                                        focusedContainerColor = Color(0xFF0C111E),
+                                        unfocusedContainerColor = Color(0xFF0C111E),
+                                        focusedBorderColor = Color(0xFF22D3EE),
+                                        unfocusedBorderColor = Color(0xFF1B273F),
+                                        disabledTextColor = Color(0xFF6B7280)
+                                    ),
+                                    textStyle = androidx.compose.ui.text.TextStyle(fontSize = 15.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center),
+                                    shape = RoundedCornerShape(8.dp),
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
                         }
                     }
                 }
@@ -513,32 +639,53 @@ class MainActivity : ComponentActivity() {
                                     }
                                 }
                                 
-                                // Export Path Field
+                                // Export Path Field / SAF folder selection Row
                                 Text(
-                                    text = "SERIALIZATION OUTPUT PATH",
+                                    text = "SERIALIZATION OUTPUT PATH (SAF)",
                                     color = Color(0xFF6B7280),
                                     fontSize = 8.5.sp,
                                     fontWeight = FontWeight.Bold,
                                     fontFamily = FontFamily.Monospace,
                                     modifier = Modifier.padding(bottom = 4.dp)
                                 )
-                                OutlinedTextField(
-                                    value = exportPath,
-                                    onValueChange = { exportPath = it },
-                                    singleLine = true,
-                                    colors = OutlinedTextFieldDefaults.colors(
-                                        focusedTextColor = Color.White,
-                                        unfocusedTextColor = Color.White,
-                                        focusedContainerColor = Color(0xFF05060A),
-                                        unfocusedContainerColor = Color(0xFF05060A),
-                                        focusedBorderColor = Color(0xFF22D3EE),
-                                        unfocusedBorderColor = Color(0xFF131A26)
-                                    ),
-                                    shape = RoundedCornerShape(8.dp),
+                                Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .padding(bottom = 12.dp)
-                                )
+                                        .padding(bottom = 12.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    OutlinedTextField(
+                                        value = selectedFolderPathName ?: "System Default Sandboxed Storage",
+                                        onValueChange = {},
+                                        readOnly = true,
+                                        singleLine = true,
+                                        colors = OutlinedTextFieldDefaults.colors(
+                                            focusedTextColor = Color.White,
+                                            unfocusedTextColor = Color.White,
+                                            focusedContainerColor = Color(0xFF05060A),
+                                            unfocusedContainerColor = Color(0xFF05060A),
+                                            focusedBorderColor = Color(0xFF22D3EE),
+                                            unfocusedBorderColor = Color(0xFF131A26)
+                                        ),
+                                        shape = RoundedCornerShape(8.dp),
+                                        modifier = Modifier.weight(1.5f),
+                                        placeholder = { Text("Using app files storage", color = Color(0xFF4B5563), fontSize = 11.sp) }
+                                    )
+                                    
+                                    Button(
+                                        onClick = { openDocumentTreeLauncher.launch(null) },
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = Color(0xFF0F1B2C),
+                                            contentColor = Color(0xFF22D3EE)
+                                        ),
+                                        shape = RoundedCornerShape(8.dp),
+                                        border = BorderStroke(1.dp, Color(0xFF1B2E4A)),
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Text("CHOOSE FOLDER", fontSize = 9.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, textAlign = TextAlign.Center)
+                                    }
+                                }
                                 
                                 // LR Slider
                                 Text(
@@ -672,6 +819,21 @@ class MainActivity : ComponentActivity() {
                     Button(
                         onClick = {
                             if (!isRunning) {
+                                val finalInputDim = inputDimText.toIntOrNull()?.coerceAtLeast(1) ?: 8
+                                val finalLayers = layersTextState.toIntOrNull()?.coerceAtLeast(1) ?: 3
+                                val finalRank = rankTextState.toIntOrNull()?.coerceAtLeast(2) ?: 4
+
+                                // Validation parameters constraints
+                                if (finalRank < 2 || finalLayers < 1) {
+                                    addLog("ERROR: Validation failure - Tensor Rank must be >= 2 and Layers must be >= 1.")
+                                    return@Button
+                                }
+
+                                // Update fields with verified values
+                                inputDimText = finalInputDim.toString()
+                                layersTextState = finalLayers.toString()
+                                rankTextState = finalRank.toString()
+
                                 isRunning = true
                                 progressPercent = 0f
                                 progressStatusText = "Crystallization Progress: 0%"
@@ -690,22 +852,22 @@ class MainActivity : ComponentActivity() {
                                 // Create training job
                                 trainingJob = coroutineScope.launch {
                                     try {
-                                        addLog("JNI: Aligning CacheAlignedArena with configuration: inputDim=$inputDim, layers=$layers, rank=$rank")
-                                        aura = AuraNative(inputDim, layers, rank)
+                                        addLog("JNI: Aligning CacheAlignedArena with configuration: inputDim=$finalInputDim, layers=$finalLayers, rank=$finalRank")
+                                        aura = AuraNative(finalInputDim, finalLayers, finalRank)
                                         addLog("JNI: Established core pointer at context address: 0x${java.lang.Long.toHexString(aura.hashCode().toLong())}")
                                         addLog("CRYSTALLIZER: Subspace vector projection commencing.")
                                         addLog("[CONFIG] Active parameters tuning: learningRate=$learningRate, decayGoal=$convergenceThreshold, policy=$thermalLimitMode")
 
                                         var step = 0
-                                        val totalSteps = 250
+                                        val totalSteps = 1000
                                         goodnessVal = 3.92f
-                                        var localRank = rank
+                                        var localRank = finalRank
                                         processorTemp = 34.8f
 
                                         while (step < totalSteps && isRunning) {
                                             // --- GENERATOR / DATA SOURCE ---
                                             val queryLower = searchQuery.lowercase().trim()
-                                            val simulatedInputs = FloatArray(inputDim)
+                                            val simulatedInputs = FloatArray(finalInputDim)
 
                                             if (queryLower.contains("номеров") || queryLower.contains("номер") || queryLower.contains("plate")) {
                                                 // 1. License Plate OCR embeddings
@@ -717,14 +879,14 @@ class MainActivity : ComponentActivity() {
                                                 val reg = Random.nextInt(10, 199)
                                                 val plateLabel = "$l1$num$l2$l3$reg"
 
-                                                if (step % 20 == 0) {
+                                                if (step % 50 == 0) {
                                                     addLog("[GENERATOR] Input feed: Simulated Plate Vector for '$plateLabel' (sparse character encoding)")
                                                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                                 }
 
-                                                for (i in 0 until inputDim) {
+                                                for (i in 0 until finalInputDim) {
                                                     val charIdx = i % plateLabel.length
-                                                    val code = plateLabel[charIdx].code.toFloat()
+                                                     val code = plateLabel[charIdx].code.toFloat()
                                                     simulatedInputs[i] = (code / 255.0f) * (0.8f + Math.sin(step.toDouble() * 0.1).toFloat() * 0.15f)
                                                 }
                                             } else if (queryLower.contains("трафик") || queryLower.contains("видео") || queryLower.contains("traffic") || queryLower.contains("аналитика")) {
@@ -732,12 +894,12 @@ class MainActivity : ComponentActivity() {
                                                 val activeTracks = Random.nextInt(5, 38)
                                                 val speedKm = 45.0f + Random.nextFloat() * 25.0f
                                                 
-                                                if (step % 20 == 0) {
+                                                if (step % 50 == 0) {
                                                     addLog("[GENERATOR] Video Frame #$step (Tracks: $activeTracks cars, Speed: ${"%.1f".format(speedKm)} km/h)")
                                                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                                 }
 
-                                                for (i in 0 until inputDim) {
+                                                for (i in 0 until finalInputDim) {
                                                     val t = step + i
                                                     simulatedInputs[i] = ((Math.sin(t * 0.3).toFloat() * 0.4f + 0.6f) * (activeTracks.toFloat() / 40.0f)).coerceIn(0f, 1f)
                                                 }
@@ -745,28 +907,28 @@ class MainActivity : ComponentActivity() {
                                                 // 3. Binary classification cluster anchors
                                                 val classLabel = if (Random.nextBoolean()) "CLASS_ANCHOR_ALPHA" else "CLASS_ANCHOR_BETA"
                                                 
-                                                if (step % 20 == 0) {
-                                                    addLog("[GENERATOR] Cluster anchor fed: '$classLabel' (dim profiles mapping: $inputDim)")
+                                                if (step % 50 == 0) {
+                                                    addLog("[GENERATOR] Cluster anchor fed: '$classLabel' (dim profiles mapping: $finalInputDim)")
                                                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                                 }
 
                                                 val baseVal = if (classLabel == "CLASS_ANCHOR_ALPHA") 0.75f else -0.75f
-                                                for (i in 0 until inputDim) {
+                                                for (i in 0 until finalInputDim) {
                                                     simulatedInputs[i] = baseVal + (Random.nextFloat() * 0.18f - 0.09f)
                                                 }
                                             } else {
                                                 // 4. Default dynamic query hashing generator
-                                                if (step % 25 == 0) {
+                                                if (step % 50 == 0) {
                                                     val displayQ = if (searchQuery.length > 15) searchQuery.take(12) + "..." else searchQuery
                                                     addLog("[GENERATOR] Hash-encoder encoding segment query: '$displayQ' into space vector...")
                                                 }
 
                                                 val queryToHash = searchQuery + "_vector_step_$step"
-                                                for (i in 0 until inputDim) {
+                                                for (i in 0 until finalInputDim) {
                                                     var h = 5381
                                                     val uniqueStr = queryToHash + "_dim_$i"
                                                     for (ch in uniqueStr) {
-                                                        h = (h shl 5) + h + ch.code
+                                                         h = (h shl 5) + h + ch.code
                                                     }
                                                     simulatedInputs[i] = (Math.abs(h % 1000) / 1000.0f) * 2.0f - 1.0f
                                                 }
@@ -787,7 +949,7 @@ class MainActivity : ComponentActivity() {
 
                                             // Learning rate speeds up/slows down convergence curves
                                             val speedMultiplier = (learningRate * 60f).coerceIn(0.5f, 5.0f)
-                                            val decayStepsNeeded = 145f / speedMultiplier
+                                            val decayStepsNeeded = 450f / speedMultiplier
                                             
                                             val limitTarget = if (step > decayStepsNeeded) {
                                                 (convergenceThreshold * 0.6f)
@@ -817,42 +979,42 @@ class MainActivity : ComponentActivity() {
                                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                             }
 
-                                            val contractionRank = if (goodnessVal < convergenceThreshold) rank else {
-                                                val limitBound = maxRank.coerceIn(subspaceParamsConstraint(rank), 16)
-                                                if (step < 50) (localRank + 2).coerceAtMost(limitBound)
-                                                else if (step < 120) (localRank + 1).coerceAtMost(limitBound)
+                                            val contractionRank = if (goodnessVal < convergenceThreshold) finalRank else {
+                                                val limitBound = maxRank.coerceIn(subspaceParamsConstraint(finalRank), 16)
+                                                if (step < 150) (localRank + 2).coerceAtMost(limitBound)
+                                                else if (step < 450) (localRank + 1).coerceAtMost(limitBound)
                                                 else localRank.coerceAtMost(limitBound)
                                             }
 
                                             activeSubspaceRankText = if (goodnessVal < convergenceThreshold) {
-                                                "R = $rank (Optimal / Fully Aligned)"
+                                                "R = $finalRank (Optimal / Fully Aligned)"
                                             } else {
                                                 "R = $contractionRank (Contraction phase)"
                                             }
 
                                             // Log periodic milestones
-                                            if (step == 5) {
+                                            if (step == 10) {
                                                 addLog("JNI: Core vectors aligned. Aligning low-rank manifolds.")
-                                            } else if (step == 50) {
+                                            } else if (step == 150) {
                                                 addLog("STREAMER: Vector feed optimal rate inside CacheAlignedArena.")
-                                            } else if (step == 120) {
+                                            } else if (step == 450) {
                                                 addLog("RING_BUFFER: Optimization active. Convergence energy metric matches: %.4f".format(goodnessVal))
-                                            } else if (step == 200) {
+                                            } else if (step == 750) {
                                                 addLog("CORE: Structural tensor consolidation verified. Completing orthogonal mapping.")
                                             }
 
                                             // --- THERMAL PACING PROFILE ---
                                             val heatIncrement = when (thermalLimitMode) {
-                                                "Eco" -> 0.012f + Random.nextFloat() * 0.008f
-                                                "Performance" -> 0.052f + Random.nextFloat() * 0.024f
-                                                else -> 0.030f + Random.nextFloat() * 0.015f
+                                                "Eco" -> 0.003f + Random.nextFloat() * 0.002f
+                                                "Performance" -> 0.015f + Random.nextFloat() * 0.006f
+                                                else -> 0.008f + Random.nextFloat() * 0.004f
                                             }
                                             
                                             processorTemp += heatIncrement
                                             var stepDelayTime = when (thermalLimitMode) {
-                                                "Eco" -> 55L
-                                                "Performance" -> 18L
-                                                else -> 32L
+                                                "Eco" -> 25L
+                                                "Performance" -> 10L
+                                                else -> 16L
                                             }
 
                                             val thresholdLimit = when (thermalLimitMode) {
@@ -862,11 +1024,11 @@ class MainActivity : ComponentActivity() {
                                             }
 
                                             if (processorTemp > thresholdLimit) {
-                                                val pacedDelay = if (thermalLimitMode == "Eco") 90L else 50L
+                                                val pacedDelay = if (thermalLimitMode == "Eco") 30L else 15L
                                                 stepDelayTime += pacedDelay
-                                                processorTemp -= if (thermalLimitMode == "Eco") 0.22f else 0.12f
-                                                if (step % 22 == 0) {
-                                                    addLog("[THERMAL_PACING] Junction Core temperature exceeded: ${"%.1f".format(processorTemp)}°C! Pacing engine cooling throttling active (+$pacedDelay ms)")
+                                                processorTemp -= if (thermalLimitMode == "Eco") 0.06f else 0.03f
+                                                if (step % 100 == 0) {
+                                                    addLog("[THERMAL_PACING] Junction Core temperature exceeded: ${"%.1f".format(processorTemp)}°C! Throttling active (+$pacedDelay ms)")
                                                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                                 }
                                             }
@@ -876,10 +1038,75 @@ class MainActivity : ComponentActivity() {
 
                                         if (isRunning) {
                                             addLog("[EXPORT] Serializing crystallized low-rank tensor model...")
-                                            addLog("[EXPORT] Saved persistent weights to matching path: $exportPath/aura_model_v1.$targetFormat")
+                                             
+                                            val finalFormat = targetFormat
+                                            val fileName = "aura_model_v1.$finalFormat"
+                                            var savedLocationPath = "Internal Storage"
+                                            var sizeBytes = 0L
+
+                                            try {
+                                                val context = this@MainActivity
+                                                val uriStr = selectedTreeUriStr
+                                                if (uriStr != null) {
+                                                    val parentUri = Uri.parse(uriStr)
+                                                    val docTree = DocumentFile.fromTreeUri(context, parentUri)
+                                                    if (docTree != null) {
+                                                        var fileDoc = docTree.findFile(fileName)
+                                                        if (fileDoc != null) {
+                                                            fileDoc.delete()
+                                                        }
+                                                        fileDoc = docTree.createFile("application/octet-stream", fileName)
+                                                        if (fileDoc != null) {
+                                                            context.contentResolver.openOutputStream(fileDoc.uri)?.use { stream ->
+                                                                val modelHeaders = ("AuraNexus Low-Rank Tensor-Train Model Weights\n" +
+                                                                        "Format: $finalFormat\n" +
+                                                                        "InputDim: $finalInputDim\n" +
+                                                                        "Layers: $finalLayers\n" +
+                                                                        "Rank: $finalRank\n" +
+                                                                        "Goodness Metric: $goodnessVal\n" +
+                                                                        "Thermal Mode: $thermalLimitMode\n" +
+                                                                        "Learning Rate: $learningRate\n").toByteArray(Charsets.UTF_8)
+                                                                val simulatedWeights = ByteArray(1024) { i -> (i * 7 + finalRank + finalLayers).toByte() }
+                                                                stream.write(modelHeaders)
+                                                                stream.write(simulatedWeights)
+                                                                sizeBytes = modelHeaders.size.toLong() + simulatedWeights.size.toLong()
+                                                            }
+                                                            savedLocationPath = selectedFolderPathName ?: "Selected SAF Folder"
+                                                        } else {
+                                                            throw Exception("Failed to initiate file reference inside selected SAF provider")
+                                                        }
+                                                    } else {
+                                                        throw Exception("Failed to resolve SAF directory reference")
+                                                    }
+                                                } else {
+                                                    // Default fallback to app internal file sandbox directory if SAF is not chosen
+                                                    val fallbackFile = java.io.File(context.filesDir, fileName)
+                                                    fallbackFile.outputStream().use { stream ->
+                                                        val modelHeaders = ("AuraNexus Low-Rank Tensor-Train Model Weights (Fallback Sandbox)\n" +
+                                                                "Format: $finalFormat\n" +
+                                                                "InputDim: $finalInputDim\n" +
+                                                                "Layers: $finalLayers\n" +
+                                                                "Rank: $finalRank\n" +
+                                                                "Goodness Metric: $goodnessVal\n").toByteArray(Charsets.UTF_8)
+                                                        val simulatedWeights = ByteArray(1024) { i -> (i * 7 + finalRank + finalLayers).toByte() }
+                                                        stream.write(modelHeaders)
+                                                        stream.write(simulatedWeights)
+                                                        sizeBytes = modelHeaders.size.toLong() + simulatedWeights.size.toLong()
+                                                    }
+                                                    savedLocationPath = fallbackFile.absolutePath
+                                                }
+                                                 
+                                                addLog("[EXPORT] Successfully serialized persistent weights!")
+                                                addLog("[EXPORT] Location: $savedLocationPath/$fileName")
+                                                addLog("[EXPORT] Physical File Size: $sizeBytes bytes")
+                                            } catch (ex: Exception) {
+                                                addLog("ERROR: Serialization export handler failed: ${ex.message}")
+                                                Log.e("AuraNexus", "Export failure: ", ex)
+                                            }
+
                                             progressStatusText = "Crystallization Complete! Fully Converged"
                                             progressStatusColor = Color(0xFF10B981)
-                                            activeSubspaceRankText = "R = $rank (Optimal)"
+                                            activeSubspaceRankText = "R = $finalRank (Optimal)"
                                             goodnessVal = (convergenceThreshold * 0.55f)
                                             goodnessColor = Color(0xFF10B981)
                                             val activeBlocks = ((4.5f - goodnessVal) * 2.8f).toInt().coerceIn(1, 10)
