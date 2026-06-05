@@ -293,12 +293,18 @@ export const JniNdkCiTab: React.FC = () => {
   const getJniCodeSnippet = (): string => {
     switch (selectedJniCodeFile) {
       case "aura-jni.cpp":
-        return `// app/src/main/cpp/aura-jni.cpp
+        return `// android-app/src/main/cpp/aura-jni.cpp
 #include <jni.h>
 #include <android/log.h>
-#include <mutex>
+#include <stdexcept>
+#include <string>
+#include <cstring>
 
-// External link to compiled Rust AuraCore libraries
+#define LOG_TAG "AURA_JNI_NATIVE"
+#define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
+#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
+
+// External linkage declarations pointing to the static Rust core
 extern "C" {
     typedef void* CorePtr;
     CorePtr init_core(int input_dim, int layers, int rank);
@@ -307,43 +313,140 @@ extern "C" {
     void destroy_core(CorePtr ptr);
 }
 
-#define LOG_TAG "AURA_JNI_BRIDGE"
-#define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
+// C++ SafeTensorView wrap over raw pointers with dynamic boundaries protection
+template <typename T>
+class SafeTensorView {
+private:
+    T* data;
+    size_t length;
+    bool is_const;
+
+public:
+    SafeTensorView(T* raw_data, size_t len, bool is_read_only = false) 
+        : data(raw_data), length(len), is_const(is_read_only) {
+        if (raw_data == nullptr && len > 0) {
+            throw std::runtime_error("NullPointer exception inside SafeTensorView initialization.");
+        }
+    }
+
+    T get(size_t index) const {
+        if (index >= length) {
+            throw std::out_of_range("Memory Access Overflow Blocked! Index out of SafeTensorView bounds.");
+        }
+        return data[index];
+    }
+
+    void set(size_t index, T value) {
+        if (is_const) {
+            throw std::runtime_error("Attempted mutate write operations on constant SafeTensorView elements.");
+        }
+        if (index >= length) {
+            throw std::out_of_range("Memory Access Overflow Blocked! Index out of SafeTensorView bounds.");
+        }
+        data[index] = value;
+    }
+
+    const T* get_raw_ptr() const { return data; }
+    size_t size() const { return length; }
+};
 
 extern "C" JNIEXPORT jlong JNICALL
 Java_com_auranexus_core_AuraNative_init(JNIEnv *env, jobject thiz, jint input_dim, jint layers, jint rank) {
-    LOGD("Java_com_auranexus_core_AuraNative_init triggered: dim=%d, l=%d, r=%d", input_dim, layers, rank);
-    CorePtr core = init_core(input_dim, layers, rank);
-    return reinterpret_cast<jlong>(core);
+    LOGD("Java_com_auranexus_core_AuraNative_init init trigger: dim=%d, layers=%d, rank=%d", input_dim, layers, rank);
+    try {
+        CorePtr core = init_core(input_dim, layers, rank);
+        if (core == nullptr) {
+            LOGE("Critical Error: init_core returned nil pointer.");
+            return 0;
+        }
+        return reinterpret_cast<jlong>(core);
+    } catch (const std::exception& e) {
+        LOGE("C++ Exception in AuraNative_init: %s", e.what());
+        jclass exClass = env->FindClass("java/lang/RuntimeException");
+        if (exClass != nullptr) {
+            env->ThrowNew(exClass, e.what());
+        }
+        return 0;
+    }
 }
 
 extern "C" JNIEXPORT jint JNICALL
 Java_com_auranexus_core_AuraNative_trainStep(JNIEnv *env, jobject thiz, jlong ptr, jfloatArray data) {
     if (ptr == 0) {
-        LOGD("ERROR: Invalid pointer passed to native trainStep");
-        return -1; 
+        LOGE("Critical error: nullptr dereference passed as core ptr in trainStep.");
+        jclass exClass = env->FindClass("java/lang/NullPointerException");
+        if (exClass != nullptr) {
+            env->ThrowNew(exClass, "AuraCore context pointer is null.");
+        }
+        return -1;
     }
+
+    if (data == nullptr) {
+        LOGE("Critical error: train data is null.");
+        return -1;
+    }
+
     CorePtr core = reinterpret_cast<CorePtr>(ptr);
-    
-    // Safety boundaries check on arrays passed via JNI
     jsize len = env->GetArrayLength(data);
     jfloat* body = env->GetFloatArrayElements(data, nullptr);
-    
-    // Execute gradient run in isolated Rust stack runtime
-    jint result = train_step_core(core, body, len);
-    
+
+    if (body == nullptr) {
+        LOGE("Could not lock JNI float array elements.");
+        return -1;
+    }
+
+    jint status = -1;
+    try {
+        // Enforce safe memory encapsulation bounds checks using SafeTensorView
+        SafeTensorView<float> view(body, static_cast<size_t>(len), true);
+        
+        // Pass checked SafeTensorView encapsulated data pointer to Rust stack context runs
+        status = train_step_core(core, view.get_raw_ptr(), static_cast<int>(view.size()));
+        
+        LOGD("Java_com_auranexus_core_AuraNative_trainStep: completed. Status=%d", status);
+    } catch (const std::exception& e) {
+        LOGE("SafeTensorView access failure caught in JNI: %s", e.what());
+        jclass exClass = env->FindClass("java/lang/IndexOutOfBoundsException");
+        if (exClass != nullptr) {
+            env->ThrowNew(exClass, e.what());
+        }
+    }
+
     env->ReleaseFloatArrayElements(data, body, JNI_ABORT);
-    return result; 
+    return status;
 }
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_auranexus_core_AuraNative_exportModel(JNIEnv *env, jobject thiz, jlong ptr, jstring path) {
-    if (ptr == 0) return;
+    if (ptr == 0) {
+        LOGE("exportModel Error: Core context pointer is null.");
+        return;
+    }
+    if (path == nullptr) {
+        LOGE("exportModel Error: Specified destination save path is null.");
+        return;
+    }
+
     CorePtr core = reinterpret_cast<CorePtr>(ptr);
-    
-    const char *nativePath = env->GetStringUTFChars(path, nullptr);
-    export_weights_core(core, nativePath);
-    env->ReleaseStringUTFChars(path, nativePath);
+    const char* utf_path = env->GetStringUTFChars(path, nullptr);
+    if (utf_path == nullptr) {
+        LOGE("Failed to extract UTF characters from Java path string.");
+        return;
+    }
+
+    try {
+        // Wrap path using SafeTensorView with bounds check (including null terminator)
+        size_t path_len = std::strlen(utf_path);
+        SafeTensorView<const char> path_view(utf_path, path_len + 1, true);
+
+        // Call core static weight serialization
+        export_weights_core(core, path_view.get_raw_ptr());
+        LOGD("Java_com_auranexus_core_AuraNative_exportModel: weight tensors exported to %s", utf_path);
+    } catch (const std::exception& e) {
+        LOGE("Safe path view access failure caught in JNI exportModel: %s", e.what());
+    }
+
+    env->ReleaseStringUTFChars(path, utf_path);
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -351,19 +454,25 @@ Java_com_auranexus_core_AuraNative_destroy(JNIEnv *env, jobject thiz, jlong ptr)
     if (ptr != 0) {
         CorePtr core = reinterpret_cast<CorePtr>(ptr);
         destroy_core(core);
-        LOGD("AuraCore context pointer %p deallocated successfully", core);
+        LOGD("Java_com_auranexus_core_AuraNative_destroy: Core clean deallocation completes successfully.");
+    } else {
+        LOGD("Java_com_auranexus_core_AuraNative_destroy: Warning, native pointer already zero.");
     }
 }`;
       case "AuraNative.kt":
-        return `// app/src/main/java/com/auranexus/core/AuraNative.kt
+        return `// android-app/src/main/java/com/auranexus/core/AuraNative.kt
 package com.auranexus.core
 
 import android.util.Log
 import java.io.File
 
 /**
- * High quality Kotlin interface binding NDK compilation targets
- * with memory lifecycle safety locks.
+ * Exception class for custom JNI errors.
+ */
+class JNIException(message: String) : Exception(message)
+
+/**
+ * Kotlin interface bridging NDK compilation targets with memory lifecycle safety.
  */
 class AuraNative(
     val inputDim: Int,
@@ -375,19 +484,35 @@ class AuraNative(
 
     init {
         try {
-            System.loadLibrary("aura_core")
+            System.loadLibrary("aura_jni")
             nativePtr = init(inputDim, layers, rank)
-            Log.d("AuraNative", "Initialised native core at pointer 0x" + java.lang.Long.toHexString(nativePtr))
+            if (nativePtr == 0L) {
+                throw JNIException("Native initialization returned zero pointer!")
+            }
+            Log.d("AuraNative", "Initialized native core at pointer: 0x" + java.lang.Long.toHexString(nativePtr))
         } catch (e: UnsatisfiedLinkError) {
             Log.e("AuraNative", "Could not load shared NDK model libraries: " + e.message)
+            throw JNIException("Failed to link aura_jni shared library: " + e.message)
         }
     }
 
+    /**
+     * Executes single gradient step using the JNI bridge.
+     */
+    @Throws(JNIException::class)
     fun trainStep(data: FloatArray): Int {
         checkValidity()
-        return trainStep(nativePtr, data)
+        val result = trainStep(nativePtr, data)
+        if (result < 0) {
+            throw JNIException("JNI execution error during trainStep: returned status $result")
+        }
+        return result
     }
 
+    /**
+     * Serializes tensor weights to file path.
+     */
+    @Throws(JNIException::class)
     fun exportModel(outputFile: File) {
         checkValidity()
         exportModel(nativePtr, outputFile.absolutePath)
@@ -400,6 +525,10 @@ class AuraNative(
         }
     }
 
+    /**
+     * Reclaims arena allocator segment deallocating the memory from the native heap cleanly.
+     */
+    @Throws(JNIException::class)
     override fun close() {
         if (nativePtr != 0L) {
             destroy(nativePtr)
@@ -408,100 +537,92 @@ class AuraNative(
         }
     }
 
+    // Native Interface External declarations mapped to aura-jni.cpp
     private external fun init(inputDim: Int, layers: Int, rank: Int): Long
     private external fun trainStep(ptr: Long, data: FloatArray): Int
     private external fun exportModel(ptr: Long, path: String)
     private external fun destroy(ptr: Long)
 }`;
       case "CMakeLists.txt":
-        return `# app/src/main/cpp/CMakeLists.txt
-cmake_minimum_required(VERSION 3.22.1)
+        return `# android-app/src/main/cpp/CMakeLists.txt
+cmake_minimum_required(VERSION 3.22)
+project(aura_jni_bridge)
 
-project("auranexus_ndk_core")
+# Enable C++17 standard as specified
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Search for the Android log interface
+# Search for the Android logger interface
 find_library(log-lib log)
 
 # Import compiled Static Rust core library
-add_library(aura_core_static STATIC IMPORTED)
-set_target_properties(aura_core_static PROPERTIES IMPORTED_LOCATION
-        \${CMAKE_CURRENT_SOURCE_DIR}/../../../../target/aarch64-linux-android/release/libaura_core.a
+add_library(aura_core STATIC IMPORTED)
+set_target_properties(aura_core PROPERTIES IMPORTED_LOCATION
+    \${CMAKE_CURRENT_SOURCE_DIR}/../../../../rust-core/target/aarch64-linux-android/release/libaura_core.a
 )
 
-# Declare C++ wrapper implementing boundaries mapping
-add_library(aura_core SHARED aura-jni.cpp)
+# Declare SHARED library implementing Java Native Interface methods
+add_library(aura_jni SHARED aura-jni.cpp)
 
-# Align configurations with native compiling headers
-target_include_directories(aura_core PRIVATE \${CMAKE_CURRENT_SOURCE_DIR})
+# Header files configuration
+target_include_directories(aura_jni PRIVATE \${CMAKE_CURRENT_SOURCE_DIR})
 
-# Link dynamic library with Static Rust binaries & Android system Loggers
-target_link_libraries(aura_core
-        aura_core_static
-        \${log-lib}
+# Link SHARED library targets with Static Rust binary and Android logging
+target_link_libraries(aura_jni
+    aura_core
+    \${log-lib}
 )`;
       case "build-apk.yml":
         return `# .github/workflows/build-apk.yml
-name: Build Android NDK APK
-on:
-  push:
-    branches: [ main, develop ]
-  pull_request:
-    branches: [ main ]
+name: Build AuraNexus APK
+on: [push]
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-    - name: Checkout Repository
-      uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+      
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
 
-    - name: Setup Java JDK 17
-      uses: actions/setup-java@v3
-      with:
-        distribution: 'temurin'
-        java-version: '17'
-        cache: 'gradle'
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
 
-    - name: Setup Android NDK and SDK Tools
-      uses: android-actions/setup-android@v2
-      with:
-        api-level: 34
-        ndk-version: 26.2.11394342
+      - name: Install Android NDK r26b
+        run: |
+          sdkmanager "ndk;26.1.10909125" --no_https
+          echo "ANDROID_NDK_HOME="\$"ANDROID_HOME/ndk/26.1.10909125" >> \$GITHUB_ENV
 
-    - name: Install Rust Toolchain
-      uses: dtolnay/rust-toolchain@stable
-      with:
-        toolchain: stable
-        targets: aarch64-linux-android
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: "\$"{{ runner.os }}-deps-v2-"\$"{{ hashFiles('**/Cargo.lock', '**/*.gradle.kts', 'gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: |
+            "\$"{{ runner.os }}-deps-v2-
 
-    - name: Setup Cargo Cache
-      uses: actions/cache@v3
-      with:
-        path: |
-          ~/.cargo/bin/
-          ~/.cargo/registry/index/
-          ~/.cargo/registry/cache/
-          ~/.cargo/git/db/
-          target/
-        key: \${{ runner.os }}-cargo-\${{ hashFiles('**/Cargo.lock') }}
+      - name: Grant execute permission for gradlew
+        run: chmod +x ./gradlew
 
-    - name: Build Rust aura-core NDK shared libraries
-      run: |
-        cargo install cargo-ndk || true
-        cargo ndk --target aarch64-linux-android build --release
+      - name: Build Debug APK
+        run: ./gradlew :android-app:assembleDebug
 
-    - name: Grant Execute Permission to Gradle
-      run: chmod +x gradlew
-
-    - name: Assemble Release/Debug Android Package APK
-      run: ./gradlew assembleDebug --no-daemon
-
-    - name: Upload Binary Artifact
-      uses: actions/upload-artifact@v3
-      with:
-        name: aura-android-debug-apk
-        path: app/build/outputs/apk/debug/app-debug.apk
-        retention-days: 7`;
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: aura-nexus-debug-apk
+          path: android-app/build/outputs/apk/debug/android-app-debug.apk
+          retention-days: 7`;
       default:
         return "";
     }

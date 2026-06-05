@@ -12,7 +12,7 @@ find_library(log-lib log)
 # Import compiled Static Rust core library
 add_library(aura_core STATIC IMPORTED)
 set_target_properties(aura_core PROPERTIES IMPORTED_LOCATION
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../../../target/aarch64-linux-android/release/libaura_core.a
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../../../rust-core/target/aarch64-linux-android/release/libaura_core.a
 )
 
 # Declare SHARED library implementing Java Native Interface methods

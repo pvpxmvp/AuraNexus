@@ -51,15 +51,32 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+
+    afterEvaluate {
+        // Для каждой ABI архитектуры создаем зависимость
+        tasks.configureEach {
+            if (name.startsWith("buildCMake") || name.startsWith("configureCMake") || name.startsWith("externalNativeBuild")) {
+                dependsOn("cargoNdkBuild")
+            }
+        }
+    }
 }
 
 // Automatic Cargo integration task registering
 tasks.register<Exec>("cargoNdkBuild") {
-    // Navigate relative to where Cargo.toml resides
-    workingDir = file("../rust-core")
+    group = "rust"
+    description = "Compile Rust core for Android NDK"
     
-    // Command line compiling toolchain
-    commandLine("cargo", "ndk", "--target", "aarch64-linux-android", "build", "--release")
+    workingDir = file("${project.rootDir}/rust-core")
+    commandLine(
+        "cargo", "ndk",
+        "--target", "aarch64-linux-android",
+        "-o", "${project.projectDir}/src/main/jniLibs",
+        "build", "--release"
+    )
+    
+    // Указываем выходные файлы, чтобы кэширование работало корректно
+    outputs.dir("${project.projectDir}/src/main/jniLibs/arm64-v8a")
 }
 
 // Make compilation depend on Rust cargo binary output
