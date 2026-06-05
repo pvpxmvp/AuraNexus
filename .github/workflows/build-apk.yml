@@ -48,9 +48,18 @@ jobs:
       - name: Build Debug APK
         run: ./gradlew :android-app:assembleDebug
 
+      - name: Find APK file
+        run: |
+          echo "Searching for APK..."
+          find android-app/build -name "*.apk" -type f
+          # Сохраняем путь в переменную окружения для следующего шага
+          APK_PATH=$(find android-app/build -name "*.apk" -type f | head -n 1)
+          echo "APK_PATH=$APK_PATH" >> $GITHUB_ENV
+
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: aura-nexus-debug-apk
-          path: android-app/build/outputs/apk/debug/android-app-debug.apk
+          path: ${{ env.APK_PATH }}
           retention-days: 7
+          if-no-files-found: error
